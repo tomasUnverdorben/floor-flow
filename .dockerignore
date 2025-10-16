@@ -1,0 +1,20 @@
+# Local dependencies and builds
+node_modules
+client/node_modules
+dist
+client/dist
+
+# Git & editor files
+.git
+.gitignore
+.vscode
+.idea
+*.log
+logs
+
+# Environment files
+.env
+client/.env
+
+# Misc
+docker-compose.yml

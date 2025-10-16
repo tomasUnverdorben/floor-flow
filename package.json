@@ -1,0 +1,25 @@
+{
+  "name": "floorflow",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "dev": "nodemon server/index.js",
+    "start": "node server/index.js",
+    "client": "npm run dev --prefix client",
+    "build": "npm run build --prefix client",
+    "lint": "npm run lint --prefix client",
+    "preview": "npm run preview --prefix client"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}

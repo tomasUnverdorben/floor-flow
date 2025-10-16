@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seats-data
+  labels:
+    {{- include "floorflow.labels" . | nindent 4 }}
+data:
+  seats.json: |-
+{{ (.Files.Get "files/seats.json") | nindent 4 }}
