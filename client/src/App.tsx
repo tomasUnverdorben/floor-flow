@@ -41,7 +41,7 @@ const ADMIN_UNAUTHORIZED_ERROR = "ADMIN_UNAUTHORIZED";
 const formatDateForDisplay = (value: string) => {
   try {
     const asDate = new Date(value);
-    return new Intl.DateTimeFormat("cs-CZ", {
+    return new Intl.DateTimeFormat("en-US", {
       year: "numeric",
       month: "long",
       day: "numeric",
@@ -117,7 +117,7 @@ function App() {
         }
         const payload = await response.json().catch(() => ({}));
         throw new Error(
-          payload?.message ?? `Aktualizace místa selhala (status ${response.status}).`
+          payload?.message ?? `Updating the seat failed (status ${response.status}).`
         );
       }
 
@@ -173,7 +173,7 @@ function App() {
         }
         const payload = await response.json().catch(() => ({}));
         throw new Error(
-          payload?.message ?? `Vytvoření místa selhalo (status ${response.status}).`
+          payload?.message ?? `Creating the seat failed (status ${response.status}).`
         );
       }
 
@@ -207,7 +207,7 @@ function App() {
         }
         const payload = await response.json().catch(() => ({}));
         throw new Error(
-          payload?.message ?? `Smazání místa selhalo (status ${response.status}).`
+          payload?.message ?? `Deleting the seat failed (status ${response.status}).`
         );
       }
 
@@ -222,7 +222,7 @@ function App() {
     setIsEditorMode(false);
     setStatusBanner({
       type: "error",
-      message: "Neplatné nebo vypršené heslo. Aktivujte režim editace znovu."
+      message: "The password is invalid or expired. Turn edit mode on again."
     });
   }, []);
 
@@ -246,7 +246,7 @@ function App() {
       };
 
       if (!response.ok) {
-        throw new Error(payload?.message ?? "Heslo není platné.");
+        throw new Error(payload?.message ?? "The password is not valid.");
       }
 
       return payload;
@@ -272,7 +272,7 @@ function App() {
       console.error(error);
       setStatusBanner({
         type: "error",
-        message: "Nepodařilo se načíst seznam míst. Zkuste to prosím znovu."
+        message: "Failed to load the seat list. Please try again."
       });
     } finally {
       setIsLoadingSeats(false);
@@ -298,7 +298,7 @@ function App() {
         console.error(error);
         setStatusBanner({
           type: "error",
-          message: "Rezervace pro zvolený den se nepodařilo načíst."
+          message: "Failed to load bookings for the selected day."
         });
       } finally {
         setIsLoadingBookings(false);
@@ -452,7 +452,7 @@ function App() {
         });
         setStatusBanner({
           type: "success",
-          message: `Pozice místa ${original.label} byla uložena.`
+          message: `Seat ${original.label} position saved.`
         });
       } catch (error) {
         console.error(error);
@@ -466,7 +466,7 @@ function App() {
         setStatusBanner({
           type: "error",
           message:
-            error instanceof Error ? error.message : "Pozici se nepodařilo uložit."
+            error instanceof Error ? error.message : "Failed to save the position."
         });
       }
     };
@@ -585,7 +585,7 @@ function App() {
         }
       }
 
-      const password = window.prompt("Zadejte heslo pro režim editace:");
+      const password = window.prompt("Enter the password for edit mode:");
       if (password === null) {
         return false;
       }
@@ -601,7 +601,7 @@ function App() {
           message:
             verifyError instanceof Error
               ? verifyError.message
-              : "Heslo není platné."
+              : "The password is not valid."
         });
         return false;
       }
@@ -617,7 +617,7 @@ function App() {
       setStatusBanner({
         type: "error",
         message:
-          error instanceof Error ? error.message : "Nepodařilo se ověřit heslo."
+          error instanceof Error ? error.message : "Failed to verify the password."
       });
     }
   };
@@ -692,7 +692,7 @@ function App() {
     setSelectedSeatId(null);
     setStatusBanner({
       type: "info",
-      message: "Klikněte do plánku a umístěte nové místo."
+      message: "Click the floor plan to place the new seat."
     });
   };
 
@@ -722,7 +722,7 @@ function App() {
     if (!trimmedId) {
       setStatusBanner({
         type: "error",
-        message: "Nové místo musí mít vyplněné ID."
+        message: "The new seat must have an ID."
       });
       return;
     }
@@ -730,7 +730,7 @@ function App() {
     if (seats.some((seat) => seat.id === trimmedId)) {
       setStatusBanner({
         type: "error",
-        message: `Seat s ID "${trimmedId}" už existuje. Zvolte prosím jiné.`
+        message: `Seat with ID "${trimmedId}" already exists. Please choose another.`
       });
       return;
     }
@@ -761,7 +761,7 @@ function App() {
       });
       setStatusBanner({
         type: "success",
-        message: `Místo ${created.label} bylo vytvořeno.`
+        message: `Seat ${created.label} has been created.`
       });
     } catch (error) {
       console.error(error);
@@ -772,7 +772,7 @@ function App() {
       setStatusBanner({
         type: "error",
         message:
-          error instanceof Error ? error.message : "Nové místo se nepodařilo uložit."
+          error instanceof Error ? error.message : "Failed to save the new seat."
       });
     }
   };
@@ -810,7 +810,7 @@ function App() {
     if (!trimmedLabel) {
       setStatusBanner({
         type: "error",
-        message: "Název místa nesmí být prázdný."
+        message: "Seat name cannot be empty."
       });
       return;
     }
@@ -840,7 +840,7 @@ function App() {
       );
       setStatusBanner({
         type: "success",
-        message: `Změny pro místo ${trimmedLabel} byly uloženy.`
+        message: `Changes for seat ${trimmedLabel} have been saved.`
       });
     } catch (error) {
       console.error(error);
@@ -851,7 +851,7 @@ function App() {
       setStatusBanner({
         type: "error",
         message:
-          error instanceof Error ? error.message : "Aktualizace místa se nezdařila."
+          error instanceof Error ? error.message : "Failed to update the seat."
       });
     }
   };
@@ -862,7 +862,7 @@ function App() {
     }
 
     const confirmed = window.confirm(
-      `Opravdu chcete odstranit místo ${seatEditorDraft.label}? Tuto akci nelze vrátit zpět.`
+      `Are you sure you want to delete seat ${seatEditorDraft.label}? This action cannot be undone.`
     );
 
     if (!confirmed) {
@@ -875,7 +875,7 @@ function App() {
       setSelectedSeatId(null);
       setStatusBanner({
         type: "info",
-        message: `Místo ${seatEditorDraft.label} bylo odstraněno.`
+        message: `Seat ${seatEditorDraft.label} has been removed.`
       });
     } catch (error) {
       console.error(error);
@@ -886,7 +886,7 @@ function App() {
       setStatusBanner({
         type: "error",
         message:
-          error instanceof Error ? error.message : "Místo se nepodařilo odstranit."
+          error instanceof Error ? error.message : "Failed to remove the seat."
       });
     }
   };
@@ -895,7 +895,7 @@ function App() {
     if (!navigator.clipboard) {
       setStatusBanner({
         type: "error",
-        message: "Prohlížeč nepodporuje kopírování do schránky."
+        message: "This browser does not support copying to the clipboard."
       });
       return;
     }
@@ -904,14 +904,14 @@ function App() {
       await navigator.clipboard.writeText(JSON.stringify(seats, null, 2));
       setStatusBanner({
         type: "success",
-        message: "Souřadnice míst byly zkopírovány do schránky."
+        message: "Seat coordinates were copied to the clipboard."
       });
     } catch (error) {
       console.error(error);
       setStatusBanner({
         type: "error",
         message:
-          error instanceof Error ? error.message : "Souřadnice se nepodařilo zkopírovat."
+          error instanceof Error ? error.message : "Failed to copy the coordinates."
       });
     }
   };
@@ -926,7 +926,7 @@ function App() {
     if (!trimmedName) {
       setStatusBanner({
         type: "error",
-        message: "Zadejte prosím jméno, pod kterým bude místo rezervováno."
+        message: "Please enter the name to book the seat under."
       });
       return;
     }
@@ -945,7 +945,7 @@ function App() {
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(
-          payload?.message ?? `Rezervace se nezdařila (status ${response.status}).`
+          payload?.message ?? `Booking failed (status ${response.status}).`
         );
       }
 
@@ -953,14 +953,14 @@ function App() {
       setBookings((existing) => [...existing, createdBooking]);
       setStatusBanner({
         type: "success",
-        message: `Místo ${selectedSeat.label} je nyní rezervováno pro ${trimmedName}.`
+        message: `Seat ${selectedSeat.label} is now booked for ${trimmedName}.`
       });
     } catch (error) {
       console.error(error);
       setStatusBanner({
         type: "error",
         message:
-          error instanceof Error ? error.message : "Rezervaci se nepodařilo dokončit."
+          error instanceof Error ? error.message : "Failed to create the booking."
       });
     }
   };
@@ -981,7 +981,7 @@ function App() {
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(
-          payload?.message ?? `Zrušení rezervace selhalo (status ${response.status}).`
+          payload?.message ?? `Canceling the booking failed (status ${response.status}).`
         );
       }
 
@@ -990,14 +990,14 @@ function App() {
       );
       setStatusBanner({
         type: "info",
-        message: `Rezervace pro ${selectedSeatBooking.userName} byla zrušena.`
+        message: `Booking for ${selectedSeatBooking.userName} has been canceled.`
       });
     } catch (error) {
       console.error(error);
       setStatusBanner({
         type: "error",
         message:
-          error instanceof Error ? error.message : "Rezervaci se nepodařilo zrušit."
+          error instanceof Error ? error.message : "Failed to cancel the booking."
       });
     }
   };
@@ -1009,14 +1009,14 @@ function App() {
     <div className="app-shell">
       <header className="app-header">
         <div>
-          <h1>Rezervace sdílených míst</h1>
+          <h1>Shared Desk Reservations</h1>
           <p>
-            Vyberte datum a kliknutím do plánku si rezervujte konkrétní pracoviště.
+            Pick a date and click the floor plan to reserve a workspace.
           </p>
         </div>
         <div className="header-actions">
           <label className="date-picker">
-            <span>Vybraný den</span>
+            <span>Selected day</span>
             <input
               type="date"
               value={selectedDate}
@@ -1028,7 +1028,7 @@ function App() {
             className={`toolbar-button ${isEditorMode ? "toolbar-active" : ""}`}
             onClick={handleToggleEditorMode}
           >
-            {isEditorMode ? "Ukončit editaci" : "Režim editace"}
+            {isEditorMode ? "Exit editing" : "Edit mode"}
           </button>
           {isEditorMode ? (
             <>
@@ -1038,18 +1038,18 @@ function App() {
                 onClick={handleStartCreateSeat}
                 disabled={Boolean(draftSeat)}
               >
-                Přidat nové místo
+                Add new seat
               </button>
               <button
                 type="button"
                 className="toolbar-button subtle"
                 onClick={handleCopySeatJson}
               >
-                Kopírovat souřadnice
+                Copy coordinates
               </button>
               <div className="editor-tuning">
                 <label className="tuning-control">
-                  <span>Zoom mapy</span>
+                  <span>Map zoom</span>
                   <div className="slider-row">
                     <input
                       type="range"
@@ -1063,7 +1063,7 @@ function App() {
                   </div>
                 </label>
                 <label className="tuning-control">
-                  <span>Velikost značek</span>
+                  <span>Marker size</span>
                   <div className="slider-row">
                     <input
                       type="range"
@@ -1077,7 +1077,7 @@ function App() {
                   </div>
                 </label>
                 <button type="button" className="toolbar-button subtle" onClick={handleResetView}>
-                  Reset pohledu
+                  Reset view
                 </button>
               </div>
             </>
@@ -1106,7 +1106,7 @@ function App() {
               >
                 <img
                   src="/floorplan.png"
-                  alt="Plánek kanceláře"
+                  alt="Office floor plan"
                   className="floorplan-image"
                   draggable={false}
                   onLoad={(event) => {
@@ -1181,7 +1181,7 @@ function App() {
                     } as SeatStyle}
                   >
                     <span className="seat-label">
-                      {draftSeat.label ? draftSeat.label : "Nové místo"}
+                      {draftSeat.label ? draftSeat.label : "New seat"}
                     </span>
                     <span className="seat-coords">
                       {draftSeat.x.toFixed(1)}%, {draftSeat.y.toFixed(1)}%
@@ -1191,30 +1191,30 @@ function App() {
               </div>
               {isEditorMode ? (
                 <div className="editor-mode-badge">
-                  Režim editace – přetáhněte existující místo nebo kliknutím přidejte nové.
+                  Edit mode - drag an existing seat or click to add a new one.
                 </div>
               ) : null}
               {isLoadingSeats ? (
-                <div className="loading">Načítám rozmístění míst…</div>
+                <div className="loading">Loading seat layout...</div>
               ) : seats.length === 0 ? (
                 <div className="loading">
-                  Nenalezeny žádné definice míst. Přidejte je do souboru
-                  <code> server/data/seats.json</code>.
+                  No seat definitions found. Add them to{" "}
+                  <code>server/data/seats.json</code>.
                 </div>
               ) : null}
             </div>
             <footer className="map-legend">
               <div className="legend-item">
                 <span className="legend-swatch legend-free" />
-                Volné místo
+                Available seat
               </div>
               <div className="legend-item">
                 <span className="legend-swatch legend-occupied" />
-                Zabrané místo
+                Booked seat
               </div>
               <div className="legend-item">
                 <span className="legend-swatch legend-selected" />
-                Vybrané místo
+                Selected seat
               </div>
             </footer>
           </div>
@@ -1226,59 +1226,59 @@ function App() {
             <h2>
               {isEditorMode
                 ? draftSeat
-                  ? "Nové místo"
+                  ? "New seat"
                   : seatEditorDraft
-                  ? `Editace ${seatEditorDraft.label || seatEditorDraft.id}`
-                  : "Vyberte místo v plánku"
+                  ? `Editing ${seatEditorDraft.label || seatEditorDraft.id}`
+                  : "Select a seat on the map"
                 : selectedSeat
-                ? `Místo ${selectedSeat.label}`
-                : "Vyberte místo v plánku"}
+                ? `Seat ${selectedSeat.label}`
+                : "Select a seat on the map"}
             </h2>
             {isEditorMode ? (
               <>
                 {draftSeat ? (
                   <>
                     <p className="editor-hint">
-                      Vyplňte detaily. Souřadnice můžete upřesnit i kliknutím do plánku.
+                      Fill in the details. You can adjust the coordinates by clicking the floor plan.
                     </p>
                     <form className="editor-form" onSubmit={handleCreateSeatSubmit}>
                       <label>
-                        ID místa
+                        Seat ID
                         <input
                           value={draftSeat.id}
                           onChange={(event) => handleDraftSeatChange("id", event.target.value)}
-                          placeholder="např. 54-2"
+                          placeholder="e.g. 54-2"
                           required
                         />
                       </label>
                       <label>
-                        Popisek
+                        Label
                         <input
                           value={draftSeat.label}
                           onChange={(event) => handleDraftSeatChange("label", event.target.value)}
-                          placeholder="Text zobrazovaný v plánku"
+                          placeholder="Text shown on the map"
                         />
                       </label>
                       <label>
-                        Zóna
+                        Zone
                         <input
                           value={draftSeat.zone ?? ""}
                           onChange={(event) => handleDraftSeatChange("zone", event.target.value)}
-                          placeholder="Volitelné označení části kanceláře"
+                          placeholder="Optional area label"
                         />
                       </label>
                       <label>
-                        Poznámka
+                        Note
                         <textarea
                           rows={2}
                           value={draftSeat.notes ?? ""}
                           onChange={(event) => handleDraftSeatChange("notes", event.target.value)}
-                          placeholder="Krátká interní poznámka"
+                          placeholder="Short internal note"
                         />
                       </label>
                       <div className="editor-grid">
                         <label>
-                          Souřadnice X (%)
+                          X coordinate (%)
                           <input
                             type="number"
                             min={0}
@@ -1289,7 +1289,7 @@ function App() {
                           />
                         </label>
                         <label>
-                          Souřadnice Y (%)
+                          Y coordinate (%)
                           <input
                             type="number"
                             min={0}
@@ -1302,14 +1302,14 @@ function App() {
                       </div>
                       <div className="editor-actions">
                         <button type="submit" className="primary">
-                          Uložit nové místo
+                          Save new seat
                         </button>
                         <button
                           type="button"
                           className="secondary"
                           onClick={handleCancelDraft}
                         >
-                          Zrušit
+                          Cancel
                         </button>
                       </div>
                     </form>
@@ -1317,8 +1317,7 @@ function App() {
                 ) : seatEditorDraft ? (
                   <>
                     <p className="editor-hint">
-                      Místo jde posunout přímo v plánku přetažením myší. Hodnoty X/Y jsou v
-                      procentech šířky a výšky obrázku.
+                      You can move the seat directly on the map by dragging it. X/Y values are percentages of the image width and height.
                     </p>
                     <form className="editor-form" onSubmit={handleSeatEditorSubmit}>
                       <label>
@@ -1326,7 +1325,7 @@ function App() {
                         <input value={seatEditorDraft.id} disabled readOnly />
                       </label>
                       <label>
-                        Název
+                        Name
                         <input
                           value={seatEditorDraft.label}
                           onChange={(event) =>
@@ -1336,14 +1335,14 @@ function App() {
                         />
                       </label>
                       <label>
-                        Zóna
+                        Zone
                         <input
                           value={seatEditorDraft.zone ?? ""}
                           onChange={(event) => handleSeatEditorChange("zone", event.target.value)}
                         />
                       </label>
                       <label>
-                        Poznámka
+                        Note
                         <textarea
                           rows={2}
                           value={seatEditorDraft.notes ?? ""}
@@ -1352,7 +1351,7 @@ function App() {
                       </label>
                       <div className="editor-grid">
                         <label>
-                          Souřadnice X (%)
+                          X coordinate (%)
                           <input
                             type="number"
                             min={0}
@@ -1363,7 +1362,7 @@ function App() {
                           />
                         </label>
                         <label>
-                          Souřadnice Y (%)
+                          Y coordinate (%)
                           <input
                             type="number"
                             min={0}
@@ -1376,17 +1375,17 @@ function App() {
                       </div>
                       <div className="editor-actions">
                         <button type="submit" className="primary">
-                          Uložit změny
+                          Save changes
                         </button>
                         <button type="button" className="danger" onClick={handleDeleteSeat}>
-                          Smazat místo
+                          Delete seat
                         </button>
                       </div>
                     </form>
                   </>
                 ) : (
                   <p className="muted">
-                    Klikněte v plánku na existující místo nebo použijte „Přidat nové místo“.
+                    Click a seat on the map or use "Add new seat".
                   </p>
                 )}
               </>
@@ -1397,7 +1396,7 @@ function App() {
                   <>
                     {selectedSeat.zone ? (
                       <p className="muted">
-                        Zóna: <strong>{selectedSeat.zone}</strong>
+                        Zone: <strong>{selectedSeat.zone}</strong>
                       </p>
                     ) : null}
                     {selectedSeat.notes ? (
@@ -1406,12 +1405,12 @@ function App() {
                     {selectedSeatBooking ? (
                       <div className="booking-card">
                         <p>
-                          Aktuálně rezervuje:{" "}
+                          Currently booked by:{" "}
                           <strong>{selectedSeatBooking.userName}</strong>
                         </p>
                         <p className="muted">
-                          Vytvořeno:{" "}
-                          {new Intl.DateTimeFormat("cs-CZ", {
+                          Created:{" "}
+                          {new Intl.DateTimeFormat("en-US", {
                             dateStyle: "short",
                             timeStyle: "short"
                           }).format(new Date(selectedSeatBooking.createdAt))}
@@ -1421,31 +1420,31 @@ function App() {
                           className="secondary"
                           onClick={handleCancelBooking}
                         >
-                          Zrušit rezervaci
+                          Cancel booking
                         </button>
                       </div>
                     ) : (
                       <form className="booking-form" onSubmit={handleBookingSubmit}>
                         <label htmlFor="userName">
-                          Jméno nebo zkratka
+                          Name or initials
                           <input
                             id="userName"
                             name="userName"
                             value={nameInput}
                             onChange={(event) => setNameInput(event.target.value)}
-                            placeholder="např. Jan Novák"
+                            placeholder="e.g. John Smith"
                             autoComplete="name"
                           />
                         </label>
                         <button type="submit" className="primary">
-                          Rezervovat toto místo
+                          Book this seat
                         </button>
                       </form>
                     )}
                   </>
                 ) : (
                   <p className="muted">
-                    Kliknutím v plánku zobrazíte detaily a můžete rezervovat.
+                    Click the floor plan to see details and make a booking.
                   </p>
                 )}
               </>
@@ -1453,11 +1452,11 @@ function App() {
             </div>
 
             <div className="sidebar-section">
-            <h3>Rezervace v tento den</h3>
+            <h3>Bookings on this day</h3>
             {anyDataLoading ? (
-              <p className="muted">Načítání…</p>
+              <p className="muted">Loading...</p>
             ) : sortedBookings.length === 0 ? (
-              <p className="muted">Ještě nikdo nic nezarezervoval.</p>
+              <p className="muted">No bookings yet.</p>
             ) : (
               <ul className="booking-list">
                 {sortedBookings.map((booking) => {

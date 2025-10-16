@@ -127,7 +127,7 @@ app.post("/api/admin/verify", (req, res) => {
   if (candidate && safeCompareString(candidate, ADMIN_PASSWORD)) {
     res.json({ authorized: true, passwordRequired: true });
   } else {
-    res.status(401).json({ message: "Heslo není platné." });
+    res.status(401).json({ message: "Password is not valid." });
   }
 });
 
@@ -140,7 +140,7 @@ app.post("/api/seats", requireAdmin, async (req, res, next) => {
 
     if (!normalizedId || xCoordinate === null || yCoordinate === null) {
       return res.status(400).json({
-        message: "Seat id, x a y jsou povinné a musí být platné číslo (0-100)."
+        message: "Seat id, x and y are required and must be valid numbers (0-100)."
       });
     }
 
@@ -149,7 +149,7 @@ app.post("/api/seats", requireAdmin, async (req, res, next) => {
     if (seats.some((seat) => seat.id === normalizedId)) {
       return res
         .status(409)
-        .json({ message: `Seat s ID "${normalizedId}" už existuje.` });
+        .json({ message: `Seat with ID "${normalizedId}" already exists.` });
     }
 
     const newSeat = {
@@ -186,7 +186,7 @@ app.put("/api/seats/:seatId", requireAdmin, async (req, res, next) => {
 
     if (seatIndex === -1) {
       console.log("Seat not found for update", seatId);
-      return res.status(404).json({ message: `Seat ${seatId} neexistuje.` });
+      return res.status(404).json({ message: `Seat ${seatId} does not exist.` });
     }
 
     const seatToUpdate = { ...seats[seatIndex] };
@@ -194,7 +194,7 @@ app.put("/api/seats/:seatId", requireAdmin, async (req, res, next) => {
     if (typeof label !== "undefined") {
       const normalizedLabel = normalizeText(label);
       if (!normalizedLabel) {
-        return res.status(400).json({ message: "Label nesmí být prázdný." });
+        return res.status(400).json({ message: "Label must not be empty." });
       }
       seatToUpdate.label = normalizedLabel;
     }
@@ -222,7 +222,7 @@ app.put("/api/seats/:seatId", requireAdmin, async (req, res, next) => {
       if (parsedX === null) {
         return res
           .status(400)
-          .json({ message: "x musí být číslo v rozmezí 0-100." });
+          .json({ message: "x must be a number between 0 and 100." });
       }
       seatToUpdate.x = parsedX;
     }
@@ -232,7 +232,7 @@ app.put("/api/seats/:seatId", requireAdmin, async (req, res, next) => {
       if (parsedY === null) {
         return res
           .status(400)
-          .json({ message: "y musí být číslo v rozmezí 0-100." });
+          .json({ message: "y must be a number between 0 and 100." });
       }
       seatToUpdate.y = parsedY;
     }
@@ -253,7 +253,7 @@ app.delete("/api/seats/:seatId", requireAdmin, async (req, res, next) => {
     const seatIndex = seats.findIndex((seat) => seat.id === seatId);
 
     if (seatIndex === -1) {
-      return res.status(404).json({ message: `Seat ${seatId} neexistuje.` });
+      return res.status(404).json({ message: `Seat ${seatId} does not exist.` });
     }
 
     const bookings = await readJson(BOOKINGS_FILE, []);
@@ -261,7 +261,7 @@ app.delete("/api/seats/:seatId", requireAdmin, async (req, res, next) => {
 
     if (hasBookings) {
       return res.status(409).json({
-        message: `Seat ${seatId} má existující rezervace. Nejprve je prosím zrušte.`
+        message: `Seat ${seatId} has existing bookings. Please cancel them first.`
       });
     }
 
@@ -419,7 +419,7 @@ function requireAdmin(req, res, next) {
 
   const provided = extractAdminHeader(req);
   if (!provided || !safeCompareString(provided, ADMIN_PASSWORD)) {
-    res.status(401).json({ message: "Neplatné heslo pro režim editace." });
+    res.status(401).json({ message: "Invalid password for edit mode." });
     return;
   }
 
