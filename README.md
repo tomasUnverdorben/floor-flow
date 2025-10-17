@@ -40,6 +40,11 @@ npm install --prefix client
 # start API server (port 4000)
 npm run dev
 
+# start API server with mongodb
+1. change MONGODB_ENABLED env value in package.json to "true" 
+2. docker compose up
+3. npm run dev
+
 # in another terminal, start the React app (port 5173)
 npm run client
 ```
