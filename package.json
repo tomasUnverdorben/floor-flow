@@ -10,6 +10,13 @@
     "lint": "npm run lint --prefix client",
     "preview": "npm run preview --prefix client"
   },
+  "nodemonConfig": {
+    "env": {
+      "MONGODB_ENABLED": "false",
+      "MONGODB_URL": "localhost:27017",
+      "MONGODB_DB_NAME": "floorflow"
+    }
+  },
   "keywords": [],
   "author": "",
   "license": "MIT",
@@ -17,7 +24,8 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.1.0",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "mongodb": "^6.20.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"
