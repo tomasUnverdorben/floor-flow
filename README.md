@@ -67,6 +67,7 @@ npm start
 | `server/index.js` | Express API with JSON-backed reservation store |
 | `server/data/seats.json` | Seat definitions (coordinates, metadata) |
 | `server/data/bookings.json` | Active bookings (auto-created) |
+| `server/data/cancellations.json` | Cancellation log used for analytics |
 | `client/src/App.tsx` | React app with interactive map & sidebar |
 | `client/public/floorplan.png` | Default floor plan image |
 
@@ -110,6 +111,7 @@ Alternatively, edit the JSON directly:
 | POST | `/api/bookings/preview` | Preview availability |
 | DELETE | `/api/bookings/:bookingId` | Cancel a single booking |
 | DELETE | `/api/bookings/series/:seriesId` | Cancel a recurring series |
+| GET | `/api/analytics/summary?from=YYYY-MM-DD&to=YYYY-MM-DD` | Aggregate booking and cancellation stats |
 
 ### 🔁 Recurring Bookings
 
@@ -117,6 +119,26 @@ Alternatively, edit the JSON directly:
 - Default: **all-or-nothing**
 - `skipConflicts: true` → only free dates are created
 - Each booking returns a `seriesId` for easy cancellation
+
+---
+
+## 👥 Managing Reservations
+
+- The sidebar shows everyone with bookings for the selected day and, in a separate panel, a full list of users with reservations.
+- Click a user chip to expand an interactive list of their upcoming bookings — move a single day to another seat or cancel it in one click.
+- The cancellation actions are synced with the server and feed into analytics automatically.
+
+---
+
+## 📊 Analytics Dashboard
+
+Need a bigger picture? Click the **Statistics** button next to *Edit mode*.
+
+- Filter by custom start/end dates or use quick ranges (7 / 30 / 90 days, year-to-date).
+- See totals for created, active, and cancelled bookings plus the average per day and the number of unique teammates reserving seats.
+- Ranked tables highlight the most popular seats, most active users, teammates who cancel most often, and the busiest days in the selected window.
+
+All metrics are powered by `/api/analytics/summary`, which computes aggregates from the JSON data store. Attach the API to BI tooling or export the results if you need deeper reporting.
 
 ---
 
