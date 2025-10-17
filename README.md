@@ -1,9 +1,31 @@
-# FloorFlow – Shared Desk Reservation App
+# 🏢 FloorFlow – Shared Desk Reservation App
 
+![FloorFlow banner](images/hero.png)
 ![FloorFlow logo](images/logo_git_readme.png)
 
-**FloorFlow** is a lightweight office desk reservation system with an interactive floor plan.  
-The **backend** runs on **Node.js/Express** (JSON-based persistence), and the **frontend** is built with **React + Vite + TypeScript**.
+![License](https://img.shields.io/github/license/tomasUnverdorben/floor-flow)
+![Last Commit](https://img.shields.io/github/last-commit/tomasUnverdorben/floor-flow)
+![Issues](https://img.shields.io/github/issues/tomasUnverdorben/floor-flow)
+![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)
+![Stars](https://img.shields.io/github/stars/tomasUnverdorben/floor-flow?style=social)
+
+---
+
+## 💡 Why FloorFlow?
+
+Modern offices are hybrid — desks are shared, not owned.  
+**FloorFlow** helps visualize your office layout and lets teammates reserve desks in just a few clicks.
+
+It’s lightweight, open-source, and easy to self-host.
+
+---
+
+## 🛠️ Tech Stack
+
+**Frontend:** React • Vite • TypeScript  
+**Backend:** Node.js • Express • JSON Store  
+**Deployment:** Docker • Helm • Kubernetes  
+**Optional:** Persistent volume storage or ephemeral mode
 
 ---
 
@@ -23,18 +45,17 @@ npm run dev
 npm run client
 ```
 
-Access the app at **http://localhost:5173**  
-(proxied to **http://localhost:4000/api**).
+Access at **http://localhost:5173** (proxy ↔ `http://localhost:4000/api`).
 
 ---
 
 ## 🏗️ Production Build
 
 ```bash
-# build the frontend into client/dist/
+# build frontend
 npm run build
 
-# start the Express server serving both API and static files
+# serve both API and built frontend
 npm start
 ```
 
@@ -44,39 +65,36 @@ npm start
 
 | Path | Description |
 |------|--------------|
-| `server/index.js` | Express API with JSON-backed reservation storage |
-| `server/data/seats.json` | Seat definitions (coordinates and metadata) |
+| `server/index.js` | Express API with JSON-backed reservation store |
+| `server/data/seats.json` | Seat definitions (coordinates, metadata) |
 | `server/data/bookings.json` | Active bookings (auto-created) |
-| `client/src/App.tsx` | React app with interactive map and sidebar |
-| `client/public/floorplan.png` | Default office floor plan image |
+| `client/src/App.tsx` | React app with interactive map & sidebar |
+| `client/public/floorplan.png` | Default floor plan image |
 
 ---
 
 ## 🗺️ Editing the Floor Plan & Seats
 
-1. Replace `client/public/floorplan.png` with your real office layout (recommended: ~1600×900).
-2. Run the app and toggle **Edit mode** in the top-right corner to:
+1. Replace `client/public/floorplan.png` with your real layout (~1600×900 recommended).
+2. Start the app and toggle **Edit mode** in the top-right corner.
+3. You can:
    - drag and reposition seats,
-   - add new seats,
-   - update labels, zones, or notes,
-   - adjust map zoom and marker size,
-   - or remove obsolete seats.
+   - add or remove seats,
+   - update labels, zones, and notes,
+   - fine-tune zoom and marker size.
+4. Changes save automatically to `server/data/seats.json`.
 
-   Changes are saved automatically to `server/data/seats.json`.
-
-3. Alternatively, edit the JSON file manually. Each seat entry includes:
-   ```json
-   {
-     "id": "35-4",
-     "label": "35-4",
-     "x": 47.2,
-     "y": 63.5,
-     "zone": "North",
-     "notes": "Near window"
-   }
-   ```
-
-Bookings are stored in `server/data/bookings.json` — no manual editing required.
+Alternatively, edit the JSON directly:
+```json
+{
+  "id": "35-4",
+  "label": "35-4",
+  "x": 47.2,
+  "y": 63.5,
+  "zone": "North",
+  "notes": "Near window"
+}
+```
 
 ---
 
@@ -90,31 +108,22 @@ Bookings are stored in `server/data/bookings.json` — no manual editing require
 | DELETE | `/api/seats/:seatId` | Remove a seat (if unbooked) |
 | GET | `/api/bookings?date=YYYY-MM-DD` | Get bookings for a date |
 | POST | `/api/bookings` | Create booking `{ seatId, date, userName, recurrence?, skipConflicts? }` |
-| POST | `/api/bookings/preview` | Preview availability and suggestions |
+| POST | `/api/bookings/preview` | Preview availability |
 | DELETE | `/api/bookings/:bookingId` | Cancel a single booking |
-| DELETE | `/api/bookings/series/:seriesId` | Cancel all future bookings in a series |
+| DELETE | `/api/bookings/series/:seriesId` | Cancel a recurring series |
 
 ### 🔁 Recurring Bookings
-- Supported via UI or API (`daily` / `weekly` up to 52 occurrences)
-- Default behavior: **all-or-nothing**
-- Use `skipConflicts: true` to only create free dates
-- Each booking returns a `seriesId` for easy bulk cancellation
 
----
-
-## 💡 Future Ideas
-
-- Authentication & permissions (limit who can edit/cancel)
-- Calendar sync (Outlook/Google)
-- Weekly/monthly availability overview
-- Database backend (PostgreSQL/SQLite)
-- CSV/Excel seat import/export + change history
+- Supported via UI or API (`daily` or `weekly`, up to 52 occurrences)
+- Default: **all-or-nothing**
+- `skipConflicts: true` → only free dates are created
+- Each booking returns a `seriesId` for easy cancellation
 
 ---
 
 ## ⚙️ Configuration Tips
 
-Set custom backend URL:
+Custom backend URL (for proxy setups):
 ```bash
 # client/.env
 VITE_API_BASE_URL=http://your-api:4000
@@ -136,7 +145,7 @@ docker run -p 4000:4000   -v $(pwd)/server/data:/app/server/data   floorflow:lat
 
 ## ⎈ Helm Chart
 
-A basic Helm chart is located at `chart/floorflow`.
+A simple Helm chart is available in `chart/floorflow`:
 
 ```bash
 helm install floorflow ./chart/floorflow   --set image.repository=<your-registry>/floorflow   --set image.tag=latest
@@ -147,14 +156,14 @@ Disable persistent storage if you prefer ephemeral data:
 helm install floorflow ./chart/floorflow --set persistence.enabled=false
 ```
 
-> The chart includes a `seats-data` ConfigMap that preloads `seats.json`.  
-> To update it, edit the JSON and redeploy via `helm upgrade`.
+> The chart includes a `seats-data` ConfigMap preloading `seats.json`.  
+> Edit it and redeploy via `helm upgrade`.
 
 ---
 
 ### 🔒 Edit Mode Password
 
-Protect the floor plan editor:
+Protect the seat editor with an environment variable:
 
 **Docker**
 ```bash
@@ -168,10 +177,38 @@ kubectl create secret generic floorflow-admin   --from-literal=password="super-s
 helm upgrade --install floorflow ./chart/floorflow   --set admin.existingSecret=floorflow-admin
 ```
 
-Without a password, everyone can edit seats.
+Without a password, edit mode is open to all users.
+
+---
+
+## 💡 Future Ideas
+
+- Authentication & roles (admin / user)
+- Calendar sync (Outlook, Google)
+- Weekly/monthly views
+- Real DB backend (PostgreSQL, SQLite)
+- CSV/Excel seat import & version history
+
+---
+
+## 🤝 Contributing
+
+Pull requests are welcome!  
+For major changes, open an issue first to discuss what you’d like to improve.
+
+```bash
+git clone https://github.com/tomasUnverdorben/floor-flow.git
+cd floor-flow
+npm install
+```
 
 ---
 
 ## 🧾 License
 
-[MIT License](./LICENSE)
+This project is licensed under the [MIT License](./LICENSE).
+
+---
+
+⭐️ **If you like FloorFlow, give it a star!**  
+💬 Have ideas? Open an [issue](../../issues) or join the discussion.
