@@ -1,6 +1,5 @@
 # 🏢 FloorFlow – Shared Desk Reservation App
 
-![FloorFlow banner](images/hero.png)
 ![FloorFlow logo](images/logo_git_readme.png)
 
 ![License](https://img.shields.io/github/license/tomasUnverdorben/floor-flow)
