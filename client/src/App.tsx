@@ -17,6 +17,7 @@ type Booking = {
   date: string;
   userName: string;
   createdAt: string;
+  seriesId?: string;
 };
 
 type SeatDraft = {
@@ -35,8 +36,34 @@ type StatusBanner =
   | { type: "error"; message: string }
   | null;
 
+type RecurrenceFrequency = "none" | "daily" | "weekly";
+
+type BookingConflict = {
+  date: string;
+  seatId: string;
+  bookingId: string;
+  userName: string;
+  seriesId?: string | null;
+};
+
+type BookingPreview = {
+  seatId: string;
+  startDate: string;
+  requestedCount: number;
+  requestedDates: string[];
+  recurrence: { frequency: "single" | "daily" | "weekly"; count: number };
+  available: string[];
+  conflicts: BookingConflict[];
+  suggestions: {
+    shorten?: { count: number; dates: string[] };
+    contiguousBlock?: { count: number; dates: string[]; startDate: string };
+    adjustStart?: { startDate: string; dates: string[] };
+  };
+};
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const ADMIN_UNAUTHORIZED_ERROR = "ADMIN_UNAUTHORIZED";
+const MAX_RECURRENCE_OCCURRENCES = 52;
 
 const formatDateForDisplay = (value: string) => {
   try {
@@ -56,6 +83,163 @@ const getToday = () => new Date().toISOString().slice(0, 10);
 
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
 const normalizeCoordinate = (value: number) => Math.round(clamp(value, 0, 100) * 10) / 10;
+
+const isBookingRecord = (candidate: unknown): candidate is Booking => {
+  if (!candidate || typeof candidate !== "object") {
+    return false;
+  }
+  const value = candidate as Record<string, unknown>;
+  return (
+    typeof value.id === "string" &&
+    typeof value.seatId === "string" &&
+    typeof value.date === "string" &&
+    typeof value.userName === "string" &&
+    typeof value.createdAt === "string" &&
+    (typeof value.seriesId === "string" ||
+      typeof value.seriesId === "undefined" ||
+      value.seriesId === null)
+  );
+};
+
+const extractCreatedBookings = (payload: unknown): Booking[] => {
+  if (!payload) {
+    return [];
+  }
+
+  if (Array.isArray(payload)) {
+    return payload.filter(isBookingRecord);
+  }
+
+  if (typeof payload === "object") {
+    const objectPayload = payload as Record<string, unknown>;
+    if (Array.isArray(objectPayload.created)) {
+      return objectPayload.created.filter(isBookingRecord);
+    }
+    if (isBookingRecord(payload)) {
+      return [payload];
+    }
+  }
+
+  return [];
+};
+
+const isConflictRecord = (candidate: unknown): candidate is BookingConflict => {
+  if (!candidate || typeof candidate !== "object") {
+    return false;
+  }
+  const value = candidate as Record<string, unknown>;
+  return (
+    typeof value.date === "string" &&
+    typeof value.seatId === "string" &&
+    typeof value.bookingId === "string" &&
+    typeof value.userName === "string"
+  );
+};
+
+const extractConflicts = (payload: unknown): BookingConflict[] => {
+  if (!payload || typeof payload !== "object") {
+    return [];
+  }
+
+  const value = payload as Record<string, unknown>;
+  if (Array.isArray(value.conflicts)) {
+    return value.conflicts.filter(isConflictRecord);
+  }
+
+  return [];
+};
+
+const toStringArray = (input: unknown): string[] =>
+  Array.isArray(input) ? input.filter((item): item is string => typeof item === "string") : [];
+
+const extractPreview = (payload: unknown): BookingPreview | null => {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const value = payload as Record<string, unknown>;
+  if (
+    typeof value.seatId !== "string" ||
+    typeof value.startDate !== "string" ||
+    typeof value.requestedCount !== "number"
+  ) {
+    return null;
+  }
+
+  const recurrenceRaw = value.recurrence;
+  if (
+    !recurrenceRaw ||
+    typeof recurrenceRaw !== "object" ||
+    typeof (recurrenceRaw as Record<string, unknown>).frequency !== "string" ||
+    typeof (recurrenceRaw as Record<string, unknown>).count !== "number"
+  ) {
+    return null;
+  }
+
+  const suggestionsRaw = value.suggestions;
+  const suggestions: BookingPreview["suggestions"] = {};
+  if (suggestionsRaw && typeof suggestionsRaw === "object") {
+    const suggestionsValue = suggestionsRaw as Record<string, unknown>;
+    const shortenRaw = suggestionsValue.shorten;
+    if (
+      shortenRaw &&
+      typeof shortenRaw === "object" &&
+      typeof (shortenRaw as Record<string, unknown>).count === "number"
+    ) {
+      suggestions.shorten = {
+        count: (shortenRaw as Record<string, unknown>).count as number,
+        dates: toStringArray((shortenRaw as Record<string, unknown>).dates)
+      };
+    }
+
+    const contiguousRaw = suggestionsValue.contiguousBlock;
+    if (
+      contiguousRaw &&
+      typeof contiguousRaw === "object" &&
+      typeof (contiguousRaw as Record<string, unknown>).count === "number" &&
+      typeof (contiguousRaw as Record<string, unknown>).startDate === "string"
+    ) {
+      suggestions.contiguousBlock = {
+        count: (contiguousRaw as Record<string, unknown>).count as number,
+        startDate: (contiguousRaw as Record<string, unknown>).startDate as string,
+        dates: toStringArray((contiguousRaw as Record<string, unknown>).dates)
+      };
+    }
+
+    const adjustRaw = suggestionsValue.adjustStart;
+    if (
+      adjustRaw &&
+      typeof adjustRaw === "object" &&
+      typeof (adjustRaw as Record<string, unknown>).startDate === "string"
+    ) {
+      suggestions.adjustStart = {
+        startDate: (adjustRaw as Record<string, unknown>).startDate as string,
+        dates: toStringArray((adjustRaw as Record<string, unknown>).dates)
+      };
+    }
+  }
+
+  if (!suggestions.shorten) {
+    suggestions.shorten = { count: 0, dates: [] };
+  }
+
+  return {
+    seatId: value.seatId as string,
+    startDate: value.startDate as string,
+    requestedCount: value.requestedCount as number,
+    requestedDates: toStringArray(value.requestedDates),
+    recurrence: {
+      frequency: (recurrenceRaw as Record<string, unknown>).frequency as
+        | "single"
+        | "daily"
+        | "weekly",
+      count: (recurrenceRaw as Record<string, unknown>).count as number
+    },
+    available: toStringArray(value.available),
+    conflicts: extractConflicts(value),
+    suggestions
+  };
+};
 
 function App() {
   const [seats, setSeats] = useState<Seat[]>([]);
@@ -77,6 +261,15 @@ function App() {
   );
   const [adminSecret, setAdminSecret] = useState<string | null>(null);
   const [isEditorAuthorized, setIsEditorAuthorized] = useState(false);
+  const [repeatFrequency, setRepeatFrequency] = useState<RecurrenceFrequency>("none");
+  const [repeatCount, setRepeatCount] = useState<number>(1);
+  const [bookingPreview, setBookingPreview] = useState<BookingPreview | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isBookingSubmitting, setIsBookingSubmitting] = useState(false);
+  const [conflictContext, setConflictContext] = useState<{
+    conflicts: BookingConflict[];
+    preview: BookingPreview | null;
+  } | null>(null);
   const floorplanRef = useRef<HTMLDivElement | null>(null);
   const floorplanContentRef = useRef<HTMLDivElement | null>(null);
   const dragOriginalSeatRef = useRef<Seat | null>(null);
@@ -328,6 +521,18 @@ function App() {
       selectedSeatId ? bookings.find((booking) => booking.seatId === selectedSeatId) ?? null : null,
     [bookings, selectedSeatId]
   );
+
+  useEffect(() => {
+    if (!selectedSeatBooking) {
+      setRepeatFrequency("none");
+      setRepeatCount(1);
+    }
+  }, [selectedSeatBooking]);
+
+  useEffect(() => {
+    setBookingPreview(null);
+    setConflictContext(null);
+  }, [selectedSeatId, selectedDate]);
 
   useEffect(() => {
     if (!isEditorMode) {
@@ -916,54 +1121,343 @@ function App() {
     }
   };
 
-  const handleBookingSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!selectedSeat) {
+  const handleRepeatFrequencyChange = (frequency: RecurrenceFrequency) => {
+    setRepeatFrequency(frequency);
+    if (frequency === "none") {
+      setRepeatCount(1);
       return;
     }
 
-    const trimmedName = nameInput.trim();
-    if (!trimmedName) {
+    setRepeatCount((current) => {
+      const minimumApplied = current < 2 ? 2 : current;
+      return Math.min(minimumApplied, MAX_RECURRENCE_OCCURRENCES);
+    });
+  };
+
+  const handleRepeatCountChange = (value: string) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return;
+    }
+
+    const normalized = Math.min(
+      MAX_RECURRENCE_OCCURRENCES,
+      Math.max(repeatFrequency === "none" ? 1 : 2, Math.trunc(numeric))
+    );
+    setRepeatCount(normalized);
+  };
+
+  const resolveRecurrenceOptions = useCallback(() => {
+    const normalizedCount = Math.min(
+      MAX_RECURRENCE_OCCURRENCES,
+      Math.max(1, Math.trunc(repeatCount))
+    );
+    if (normalizedCount !== repeatCount) {
+      setRepeatCount(normalizedCount);
+    }
+
+    const recurrencePayload =
+      repeatFrequency !== "none" && normalizedCount > 1
+        ? { frequency: repeatFrequency, count: normalizedCount }
+        : undefined;
+
+    return { normalizedCount, recurrencePayload };
+  }, [repeatCount, repeatFrequency]);
+
+  const submitBookingRequest = useCallback(
+    async ({ skipConflicts = false }: { skipConflicts?: boolean } = {}) => {
+      if (!selectedSeat) {
+        setStatusBanner({
+          type: "error",
+          message: "Select a seat on the map before creating a booking."
+        });
+        return;
+      }
+
+      const trimmedName = nameInput.trim();
+      if (!trimmedName) {
+        setStatusBanner({
+          type: "error",
+          message: "Please enter the name to book the seat under."
+        });
+        return;
+      }
+
+      const { recurrencePayload } = resolveRecurrenceOptions();
+
+      const requestBody: Record<string, unknown> = {
+        seatId: selectedSeat.id,
+        date: selectedDate,
+        userName: trimmedName
+      };
+
+      if (recurrencePayload) {
+        requestBody.recurrence = recurrencePayload;
+      }
+      if (skipConflicts) {
+        requestBody.skipConflicts = true;
+      }
+
+      setIsBookingSubmitting(true);
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/bookings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody)
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          if (response.status === 409) {
+            const conflicts = extractConflicts(payload);
+            const preview =
+              payload && typeof payload === "object"
+                ? extractPreview((payload as Record<string, unknown>).preview)
+                : null;
+            setConflictContext({
+              conflicts,
+              preview
+            });
+            if (preview) {
+              setBookingPreview(preview);
+            }
+
+            const message =
+              payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).message === "string"
+                ? ((payload as Record<string, unknown>).message as string)
+                : `Seat ${selectedSeat.label} is not available for ${conflicts.length} occurrence(s).`;
+
+            setStatusBanner({
+              type: "error",
+              message
+            });
+            return;
+          }
+
+          throw new Error(
+            payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).message === "string"
+              ? ((payload as Record<string, unknown>).message as string)
+              : `Booking failed (status ${response.status}).`
+          );
+        }
+
+        const createdBookings = extractCreatedBookings(payload);
+        if (createdBookings.length === 0) {
+          throw new Error("Booking was created, but the server response was unexpected.");
+        }
+
+        const bookingsForSelectedDate = createdBookings.filter(
+          (booking) => booking.date === selectedDate
+        );
+
+        if (bookingsForSelectedDate.length > 0) {
+          setBookings((existing) => {
+            const filtered = existing.filter(
+              (booking) =>
+                !bookingsForSelectedDate.some(
+                  (created) => created.date === booking.date && created.seatId === booking.seatId
+                )
+            );
+            return [...filtered, ...bookingsForSelectedDate];
+          });
+        }
+
+        setConflictContext(null);
+
+        const previewFromPayload =
+          payload && typeof payload === "object"
+            ? extractPreview((payload as Record<string, unknown>).preview)
+            : null;
+        setBookingPreview(previewFromPayload);
+
+        const sortedCreatedBookings = [...createdBookings].sort((a, b) =>
+          a.date.localeCompare(b.date)
+        );
+
+        const firstDate = sortedCreatedBookings[0]?.date ?? selectedDate;
+        const lastDate =
+          sortedCreatedBookings[sortedCreatedBookings.length - 1]?.date ?? selectedDate;
+
+        const serverMessage =
+          payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).message === "string"
+            ? ((payload as Record<string, unknown>).message as string)
+            : null;
+
+        const successMessage =
+          serverMessage ??
+          (createdBookings.length === 1
+            ? `Seat ${selectedSeat.label} is now booked for ${trimmedName}.`
+            : `Seat ${selectedSeat.label} is now booked ${createdBookings.length} times for ${trimmedName} (from ${formatDateForDisplay(
+                firstDate
+              )} to ${formatDateForDisplay(lastDate)}).`);
+
+        setStatusBanner({
+          type: "success",
+          message: successMessage
+        });
+      } catch (error) {
+        console.error(error);
+        setStatusBanner({
+          type: "error",
+          message:
+            error instanceof Error ? error.message : "Failed to create the booking."
+        });
+      } finally {
+        setIsBookingSubmitting(false);
+      }
+    },
+    [
+      nameInput,
+      resolveRecurrenceOptions,
+      selectedDate,
+      selectedSeat,
+      setBookings,
+      setStatusBanner,
+      setConflictContext,
+      setBookingPreview
+    ]
+  );
+
+  const handleBookingSubmit = useCallback(
+    (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      void submitBookingRequest();
+    },
+    [submitBookingRequest]
+  );
+
+  const handleSkipConflictsSubmit = useCallback(() => {
+    void submitBookingRequest({ skipConflicts: true });
+  }, [submitBookingRequest]);
+
+  const handleBookingPreview = useCallback(async () => {
+    if (!selectedSeat) {
       setStatusBanner({
         type: "error",
-        message: "Please enter the name to book the seat under."
+        message: "Select a seat on the map before previewing availability."
       });
       return;
     }
 
+    const { recurrencePayload } = resolveRecurrenceOptions();
+
+    const requestBody: Record<string, unknown> = {
+      seatId: selectedSeat.id,
+      date: selectedDate
+    };
+
+    if (recurrencePayload) {
+      requestBody.recurrence = recurrencePayload;
+    }
+
+    setIsPreviewLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/bookings`, {
+      const response = await fetch(`${API_BASE_URL}/api/bookings/preview`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          seatId: selectedSeat.id,
-          date: selectedDate,
-          userName: trimmedName
-        })
+        body: JSON.stringify(requestBody)
       });
 
+      const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
         throw new Error(
-          payload?.message ?? `Booking failed (status ${response.status}).`
+          payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).message === "string"
+            ? ((payload as Record<string, unknown>).message as string)
+            : `Preview failed (status ${response.status}).`
         );
       }
 
-      const createdBooking: Booking = await response.json();
-      setBookings((existing) => [...existing, createdBooking]);
+      const preview = extractPreview(payload);
+      if (!preview) {
+        throw new Error("Preview response was not in the expected format.");
+      }
+
+      setBookingPreview(preview);
+      setConflictContext(
+        preview.conflicts.length > 0 ? { conflicts: preview.conflicts, preview } : null
+      );
+
+      const infoMessage =
+        preview.conflicts.length === 0
+          ? `All ${preview.requestedCount} requested dates are available.`
+          : `${preview.available.length}/${preview.requestedCount} requested dates are available.`;
+
       setStatusBanner({
-        type: "success",
-        message: `Seat ${selectedSeat.label} is now booked for ${trimmedName}.`
+        type: "info",
+        message: infoMessage
       });
     } catch (error) {
       console.error(error);
       setStatusBanner({
         type: "error",
         message:
-          error instanceof Error ? error.message : "Failed to create the booking."
+          error instanceof Error ? error.message : "Failed to preview the booking."
       });
+    } finally {
+      setIsPreviewLoading(false);
     }
-  };
+  }, [
+    resolveRecurrenceOptions,
+    selectedDate,
+    selectedSeat,
+    setBookingPreview,
+    setConflictContext,
+    setStatusBanner
+  ]);
+
+  const handleApplyAdjustedStart = useCallback(
+    (startDate: string) => {
+      setSelectedDate(startDate);
+      setConflictContext(null);
+      setStatusBanner({
+        type: "info",
+        message: `Start date updated to ${formatDateForDisplay(startDate)}.`
+      });
+    },
+    [setConflictContext, setSelectedDate, setStatusBanner]
+  );
+
+  const handleApplyShortenSuggestion = useCallback(
+    (count: number) => {
+      if (!Number.isFinite(count) || count < 1) {
+        return;
+      }
+      setRepeatCount(count);
+      if (count === 1) {
+        setRepeatFrequency("none");
+      }
+      setConflictContext(null);
+      setStatusBanner({
+        type: "info",
+        message: `Recurrence length updated to ${count} occurrence${count === 1 ? "" : "s"}.`
+      });
+    },
+    [setConflictContext, setRepeatCount, setRepeatFrequency, setStatusBanner]
+  );
+
+  const handleApplyContiguousSuggestion = useCallback(
+    (startDate: string, count: number, frequency: BookingPreview["recurrence"]["frequency"]) => {
+      if (!Number.isFinite(count) || count < 1) {
+        return;
+      }
+      setSelectedDate(startDate);
+      setRepeatCount(count);
+      if (frequency === "daily" || frequency === "weekly") {
+        setRepeatFrequency(frequency);
+      } else if (count === 1) {
+        setRepeatFrequency("none");
+      }
+      setConflictContext(null);
+      setStatusBanner({
+        type: "info",
+        message: `Using the suggested series starting ${formatDateForDisplay(
+          startDate
+        )} with ${count} occurrence${count === 1 ? "" : "s"}.`
+      });
+    },
+    [setConflictContext, setRepeatCount, setRepeatFrequency, setSelectedDate, setStatusBanner]
+  );
 
   const handleCancelBooking = async () => {
     if (!selectedSeatBooking) {
@@ -988,6 +1482,7 @@ function App() {
       setBookings((existing) =>
         existing.filter((booking) => booking.id !== selectedSeatBooking.id)
       );
+      setConflictContext(null);
       setStatusBanner({
         type: "info",
         message: `Booking for ${selectedSeatBooking.userName} has been canceled.`
@@ -1002,17 +1497,93 @@ function App() {
     }
   };
 
+  const handleCancelSeries = async () => {
+    if (!selectedSeatBooking?.seriesId) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Cancel all remaining occurrences in this series? This cannot be undone."
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/bookings/series/${selectedSeatBooking.seriesId}`,
+        {
+          method: "DELETE"
+        }
+      );
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).message === "string"
+            ? ((payload as Record<string, unknown>).message as string)
+            : `Canceling the series failed (status ${response.status}).`
+        );
+      }
+
+      const removed = Array.isArray((payload as Record<string, unknown>).removed)
+        ? ((payload as Record<string, unknown>).removed as Array<Record<string, unknown>>)
+            .filter((item) => typeof item === "object" && typeof item.id === "string")
+            .map((item) => ({
+              id: item.id as string,
+              date: typeof item.date === "string" ? item.date : undefined
+            }))
+        : [];
+
+      if (removed.length > 0) {
+        setBookings((existing) =>
+          existing.filter(
+            (booking) => !removed.some((entry) => entry.id === booking.id)
+          )
+        );
+      }
+
+      setConflictContext(null);
+      setStatusBanner({
+        type: "info",
+        message:
+          removed.length > 0
+            ? `Canceled ${removed.length} remaining occurrence${
+                removed.length === 1 ? "" : "s"
+              } in this series.`
+            : "No future occurrences remained in this series."
+      });
+    } catch (error) {
+      console.error(error);
+      setStatusBanner({
+        type: "error",
+        message:
+          error instanceof Error ? error.message : "Failed to cancel the series."
+      });
+    }
+  };
+
   const isSeatBooked = (seatId: string) =>
     bookings.some((booking) => booking.seatId === seatId);
 
   return (
     <div className="app-shell">
       <header className="app-header">
-        <div>
-          <h1>Shared Desk Reservations</h1>
-          <p>
-            Pick a date and click the floor plan to reserve a workspace.
-          </p>
+        <div className="app-brand">
+          <img
+            src="/logo.png"
+            alt="FloorFlow logo"
+            className="app-logo"
+            width={80}
+            height={80}
+          />
+          <div>
+            <h1>Shared Desk Reservations</h1>
+            <p>
+              Pick a date and click the floor plan to reserve a workspace.
+            </p>
+          </div>
         </div>
         <div className="header-actions">
           <label className="date-picker">
@@ -1422,24 +1993,209 @@ function App() {
                         >
                           Cancel booking
                         </button>
+                        {selectedSeatBooking.seriesId ? (
+                          <button
+                            type="button"
+                            className="link-button"
+                            onClick={handleCancelSeries}
+                          >
+                            Cancel remaining occurrences
+                          </button>
+                        ) : null}
                       </div>
                     ) : (
-                      <form className="booking-form" onSubmit={handleBookingSubmit}>
-                        <label htmlFor="userName">
-                          Name or initials
-                          <input
-                            id="userName"
-                            name="userName"
-                            value={nameInput}
-                            onChange={(event) => setNameInput(event.target.value)}
-                            placeholder="e.g. John Smith"
-                            autoComplete="name"
-                          />
-                        </label>
-                        <button type="submit" className="primary">
-                          Book this seat
-                        </button>
-                      </form>
+                      <div className="booking-flow">
+                        <form className="booking-form" onSubmit={handleBookingSubmit}>
+                          <label htmlFor="userName">
+                            Name or initials
+                            <input
+                              id="userName"
+                              name="userName"
+                              value={nameInput}
+                              onChange={(event) => setNameInput(event.target.value)}
+                              placeholder="e.g. John Smith"
+                              autoComplete="name"
+                            />
+                          </label>
+                          <label htmlFor="repeatFrequency">
+                            Repeat
+                            <select
+                              id="repeatFrequency"
+                              name="repeatFrequency"
+                              value={repeatFrequency}
+                              onChange={(event) =>
+                                handleRepeatFrequencyChange(event.target.value as RecurrenceFrequency)
+                              }
+                            >
+                              <option value="none">Do not repeat</option>
+                              <option value="daily">Every day</option>
+                              <option value="weekly">Every week</option>
+                            </select>
+                            <span className="field-hint">
+                              Choose how often this reservation should repeat.
+                            </span>
+                          </label>
+                          <label htmlFor="repeatCount">
+                            Number of occurrences
+                            <input
+                              id="repeatCount"
+                              name="repeatCount"
+                              type="number"
+                              min={repeatFrequency === "none" ? 1 : 2}
+                              max={MAX_RECURRENCE_OCCURRENCES}
+                              value={repeatCount}
+                              disabled={repeatFrequency === "none"}
+                              onChange={(event) => handleRepeatCountChange(event.target.value)}
+                            />
+                            <span className="field-hint">
+                              Includes the selected date. Maximum {MAX_RECURRENCE_OCCURRENCES}.
+                            </span>
+                          </label>
+                          <div className="booking-actions">
+                            <button
+                              type="submit"
+                              className="primary"
+                              disabled={isBookingSubmitting}
+                            >
+                              {isBookingSubmitting ? "Booking…" : "Book this seat"}
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary"
+                              onClick={handleBookingPreview}
+                              disabled={isBookingSubmitting || isPreviewLoading}
+                            >
+                              {isPreviewLoading ? "Checking…" : "Preview availability"}
+                            </button>
+                          </div>
+                        </form>
+                        {conflictContext ? (
+                          <div className="conflict-banner">
+                            <p>
+                              Seat {selectedSeat?.label ?? selectedSeatId ?? "selected seat"} is not
+                              available for {conflictContext.conflicts.length} occurrence
+                              {conflictContext.conflicts.length === 1 ? "" : "s"}.
+                            </p>
+                            {conflictContext.conflicts.length > 0 ? (
+                              <ul className="conflict-list">
+                                {conflictContext.conflicts.slice(0, 5).map((conflict) => (
+                                  <li key={conflict.bookingId}>
+                                    {formatDateForDisplay(conflict.date)} — {conflict.userName}
+                                  </li>
+                                ))}
+                                {conflictContext.conflicts.length > 5 ? (
+                                  <li>
+                                    …and {conflictContext.conflicts.length - 5} more conflicts.
+                                  </li>
+                                ) : null}
+                              </ul>
+                            ) : null}
+                            <div className="conflict-actions">
+                              <button
+                                type="button"
+                                className="primary"
+                                onClick={handleSkipConflictsSubmit}
+                                disabled={isBookingSubmitting}
+                              >
+                                {isBookingSubmitting ? "Saving…" : "Book available days only"}
+                              </button>
+                              {conflictContext.preview?.suggestions.adjustStart?.startDate ? (
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  onClick={() =>
+                                    handleApplyAdjustedStart(
+                                      conflictContext.preview?.suggestions.adjustStart?.startDate ??
+                                        selectedDate
+                                    )
+                                  }
+                                >
+                                  Find nearest free series
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
+                        {bookingPreview ? (
+                          <div className="preview-summary">
+                            <h4>Availability preview</h4>
+                            <p>
+                              {bookingPreview.available.length} of {bookingPreview.requestedCount} requested
+                              date{bookingPreview.requestedCount === 1 ? "" : "s"} are available.
+                            </p>
+                            {bookingPreview.conflicts.length > 0 ? (
+                              <ul className="conflict-list">
+                                {bookingPreview.conflicts.slice(0, 5).map((conflict) => (
+                                  <li key={`preview-${conflict.bookingId}`}>
+                                    {formatDateForDisplay(conflict.date)} — {conflict.userName}
+                                  </li>
+                                ))}
+                                {bookingPreview.conflicts.length > 5 ? (
+                                  <li>
+                                    …and {bookingPreview.conflicts.length - 5} more conflicts.
+                                  </li>
+                                ) : null}
+                              </ul>
+                            ) : (
+                              <p className="muted">No conflicts detected.</p>
+                            )}
+                            <div className="preview-suggestions">
+                              {bookingPreview.suggestions.shorten &&
+                              bookingPreview.suggestions.shorten.count > 0 &&
+                              bookingPreview.suggestions.shorten.count < bookingPreview.requestedCount ? (
+                                <button
+                                  type="button"
+                                  className="link-button"
+                                  onClick={() =>
+                                    handleApplyShortenSuggestion(
+                                      bookingPreview.suggestions.shorten!.count
+                                    )
+                                  }
+                                >
+                                  Shorten series to {bookingPreview.suggestions.shorten.count} occurrence
+                                  {bookingPreview.suggestions.shorten.count === 1 ? "" : "s"}
+                                </button>
+                              ) : null}
+                              {bookingPreview.suggestions.contiguousBlock ? (
+                                <button
+                                  type="button"
+                                  className="link-button"
+                                  onClick={() =>
+                                    handleApplyContiguousSuggestion(
+                                      bookingPreview.suggestions.contiguousBlock!.startDate,
+                                      bookingPreview.suggestions.contiguousBlock!.count,
+                                      bookingPreview.recurrence.frequency
+                                    )
+                                  }
+                                >
+                                  Use free block from{" "}
+                                  {formatDateForDisplay(
+                                    bookingPreview.suggestions.contiguousBlock.startDate
+                                  )}{" "}
+                                  ({bookingPreview.suggestions.contiguousBlock.count} occurrence
+                                  {bookingPreview.suggestions.contiguousBlock.count === 1 ? "" : "s"})
+                                </button>
+                              ) : null}
+                              {bookingPreview.suggestions.adjustStart?.startDate ? (
+                                <button
+                                  type="button"
+                                  className="link-button"
+                                  onClick={() =>
+                                    handleApplyAdjustedStart(
+                                      bookingPreview.suggestions.adjustStart!.startDate
+                                    )
+                                  }
+                                >
+                                  Shift start to{" "}
+                                  {formatDateForDisplay(
+                                    bookingPreview.suggestions.adjustStart.startDate
+                                  )}
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
                     )}
                   </>
                 ) : (

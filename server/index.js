@@ -13,6 +13,8 @@ const SEATS_FILE = path.join(DATA_DIR, "seats.json");
 const BOOKINGS_FILE = path.join(DATA_DIR, "bookings.json");
 const CLIENT_BUILD_DIR = path.join(__dirname, "..", "client", "dist");
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ? String(process.env.ADMIN_PASSWORD) : "";
+const MAX_RECURRENCE_OCCURRENCES = 52;
+const PREVIEW_LOOKAHEAD_DAYS = 365;
 
 app.use(cors());
 app.use(express.json());
@@ -293,13 +295,23 @@ app.get("/api/bookings", async (req, res, next) => {
 
 app.post("/api/bookings", async (req, res, next) => {
   try {
-    const { seatId, date, userName } = req.body || {};
+    const { seatId, date, userName, recurrence, skipConflicts } = req.body || {};
     const trimmedName = typeof userName === "string" ? userName.trim() : "";
     const normalizedDate = normalizeDate(date);
 
     if (!seatId || !trimmedName || !normalizedDate) {
       return res.status(400).json({
         message: "seatId, date and userName are required and must be valid."
+      });
+    }
+
+    let recurrenceConfig = null;
+    try {
+      recurrenceConfig = normalizeRecurrence(recurrence);
+    } catch (error) {
+      return res.status(400).json({
+        message:
+          error instanceof Error ? error.message : "Recurrence definition is not valid."
       });
     }
 
@@ -313,28 +325,134 @@ app.post("/api/bookings", async (req, res, next) => {
       return res.status(404).json({ message: `Seat ${seatId} does not exist.` });
     }
 
-    const alreadyBooked = bookings.find(
-      (booking) => booking.seatId === seatId && booking.date === normalizedDate
-    );
+    const plan = computeBookingPlan({
+      seatId,
+      startDate: normalizedDate,
+      recurrence: recurrenceConfig,
+      bookings
+    });
 
-    if (alreadyBooked) {
+    if (plan.targetDates.length === 0) {
+      return res.status(400).json({ message: "Requested booking dates could not be resolved." });
+    }
+
+    if (plan.conflicts.length > 0 && !skipConflicts) {
       return res.status(409).json({
-        message: `Seat ${seatId} is already booked for ${normalizedDate}.`
+        message: `Seat ${seatId} is already booked for ${plan.conflicts
+          .map((conflict) => conflict.date)
+          .join(", ")}.`,
+        conflicts: plan.conflicts.map(toPublicConflict),
+        preview: buildPreviewResponse(plan, recurrenceConfig)
       });
     }
 
-    const newBooking = {
-      id: uuid(),
-      seatId,
-      date: normalizedDate,
-      userName: trimmedName,
-      createdAt: new Date().toISOString()
-    };
+    const allowedDates =
+      plan.conflicts.length > 0 && skipConflicts
+        ? plan.targetDates.filter(
+            (date) => !plan.conflicts.some((conflict) => conflict.date === date)
+          )
+        : plan.targetDates;
 
-    bookings.push(newBooking);
+    if (allowedDates.length === 0) {
+      return res.status(409).json({
+        message: `Seat ${seatId} is not available on any of the requested dates.`,
+        conflicts: plan.conflicts.map(toPublicConflict),
+        preview: buildPreviewResponse(plan, recurrenceConfig)
+      });
+    }
+
+    const timestamp = new Date().toISOString();
+    const seriesId = uuid();
+    const newBookings = allowedDates.map((bookingDate) => ({
+      id: uuid(),
+      seriesId,
+      seatId,
+      date: bookingDate,
+      userName: trimmedName,
+      createdAt: timestamp
+    }));
+
+    bookings.push(...newBookings);
     await writeJson(BOOKINGS_FILE, bookings);
 
-    res.status(201).json(newBooking);
+    if (skipConflicts) {
+      res.status(201).json({
+        message:
+          plan.conflicts.length > 0
+            ? `Created ${newBookings.length} bookings and skipped ${plan.conflicts.length}.`
+            : `Created ${newBookings.length} bookings.`,
+        seriesId,
+        created: newBookings,
+        skipped: plan.conflicts.map((conflict) => ({
+          date: conflict.date,
+          reason: "conflict",
+          booking: toPublicConflict(conflict)
+        })),
+        conflicts: plan.conflicts.map(toPublicConflict).filter(Boolean),
+        requestedCount: plan.targetDates.length,
+        preview: buildPreviewResponse(plan, recurrenceConfig)
+      });
+      return;
+    }
+
+    if (newBookings.length === 1) {
+      res.status(201).json(newBookings[0]);
+    } else {
+      res.status(201).json({
+        seriesId,
+        created: newBookings,
+        recurrence: recurrenceConfig
+          ? {
+              frequency: recurrenceConfig.frequency,
+              count: recurrenceConfig.count
+            }
+          : { frequency: "single", count: newBookings.length }
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/bookings/preview", async (req, res, next) => {
+  try {
+    const { seatId, date, recurrence } = req.body || {};
+    const normalizedDate = normalizeDate(date);
+
+    if (!seatId || !normalizedDate) {
+      return res.status(400).json({
+        message: "seatId and date are required and must be valid."
+      });
+    }
+
+    let recurrenceConfig = null;
+    try {
+      recurrenceConfig = normalizeRecurrence(recurrence);
+    } catch (error) {
+      return res.status(400).json({
+        message:
+          error instanceof Error ? error.message : "Recurrence definition is not valid."
+      });
+    }
+
+    const [seats, bookings] = await Promise.all([
+      readJson(SEATS_FILE, []),
+      readJson(BOOKINGS_FILE, [])
+    ]);
+
+    const seatExists = seats.some((seat) => seat.id === seatId);
+    if (!seatExists) {
+      return res.status(404).json({ message: `Seat ${seatId} does not exist.` });
+    }
+
+    const plan = computeBookingPlan({
+      seatId,
+      startDate: normalizedDate,
+      recurrence: recurrenceConfig,
+      bookings
+    });
+
+    res.json(buildPreviewResponse(plan, recurrenceConfig));
   } catch (error) {
     next(error);
   }
@@ -358,6 +476,39 @@ app.delete("/api/bookings/:bookingId", async (req, res, next) => {
     await writeJson(BOOKINGS_FILE, bookings);
 
     res.json({ removed: removedBooking });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/bookings/series/:seriesId", async (req, res, next) => {
+  try {
+    const { seriesId } = req.params;
+    if (!seriesId) {
+      return res.status(400).json({ message: "seriesId parameter is required." });
+    }
+
+    const bookings = await readJson(BOOKINGS_FILE, []);
+    const today = new Date().toISOString().slice(0, 10);
+
+    const [remaining, removed] = partitionBookingsBySeries(bookings, seriesId, today);
+
+    if (removed.length === 0) {
+      return res
+        .status(404)
+        .json({ message: `No upcoming bookings found for series ${seriesId}.` });
+    }
+
+    await writeJson(BOOKINGS_FILE, remaining);
+    res.json({
+      seriesId,
+      removed: removed.map((booking) => ({
+        id: booking.id,
+        seatId: booking.seatId,
+        date: booking.date,
+        userName: booking.userName
+      }))
+    });
   } catch (error) {
     next(error);
   }
@@ -393,6 +544,209 @@ ensureDataFiles()
     console.error("Failed to start server:", error);
     process.exit(1);
   });
+function computeBookingPlan({ seatId, startDate, recurrence, bookings }) {
+  const seatBookings = bookings.filter((booking) => booking.seatId === seatId);
+  const bookingMap = new Map(
+    seatBookings.map((booking) => [booking.date, booking])
+  );
+  const targetDates = recurrence
+    ? generateRecurrenceDates(startDate, recurrence)
+    : [startDate];
+
+  const conflicts = targetDates
+    .map((date) => {
+      const existing = bookingMap.get(date);
+      if (!existing) {
+        return null;
+      }
+      return { date, booking: existing };
+    })
+    .filter(Boolean);
+
+  const availableDates = targetDates.filter((date) => !bookingMap.has(date));
+
+  return {
+    seatId,
+    startDate,
+    recurrence,
+    targetDates,
+    conflicts,
+    availableDates,
+    bookingMap
+  };
+}
+
+function toPublicConflict(conflict) {
+  if (!conflict) {
+    return null;
+  }
+
+  const booking = conflict.booking ?? conflict;
+  return {
+    date: conflict.date ?? booking.date,
+    seatId: booking.seatId,
+    bookingId: booking.id,
+    userName: booking.userName,
+    seriesId: booking.seriesId ?? null
+  };
+}
+
+function buildPreviewResponse(plan, recurrence) {
+  const suggestions = computeSuggestions(plan, recurrence);
+  return {
+    seatId: plan.seatId,
+    startDate: plan.startDate,
+    requestedCount: plan.targetDates.length,
+    requestedDates: plan.targetDates,
+    recurrence: recurrence
+      ? { frequency: recurrence.frequency, count: recurrence.count }
+      : { frequency: "single", count: plan.targetDates.length },
+    available: plan.availableDates,
+    conflicts: plan.conflicts.map(toPublicConflict).filter(Boolean),
+    suggestions
+  };
+}
+
+function computeSuggestions(plan, recurrence) {
+  const suggestions = {};
+  const availableSet = new Set(plan.availableDates);
+  const intervalDays = getIntervalDays(recurrence);
+
+  if (plan.targetDates.length > 0) {
+    const shortenDates = collectRun(plan.targetDates, 0, availableSet, intervalDays);
+    suggestions.shorten = {
+      count: shortenDates.length,
+      dates: shortenDates
+    };
+
+    const contiguous = findLongestRun(plan.targetDates, availableSet, intervalDays);
+    if (contiguous) {
+      suggestions.contiguousBlock = contiguous;
+    }
+  }
+
+  const alternative =
+    findNextAvailableSeries(plan, recurrence, plan.bookingMap) ?? null;
+  if (alternative && (plan.conflicts.length > 0 || alternative.startDate !== plan.startDate)) {
+    suggestions.adjustStart = alternative;
+  }
+
+  return suggestions;
+}
+
+function getIntervalDays(recurrence) {
+  if (!recurrence) {
+    return null;
+  }
+  return recurrence.frequency === "weekly" ? 7 : 1;
+}
+
+function collectRun(targetDates, startIndex, availableSet, intervalDays) {
+  if (startIndex >= targetDates.length) {
+    return [];
+  }
+
+  const dates = [];
+  let previous = null;
+
+  for (let index = startIndex; index < targetDates.length; index += 1) {
+    const currentDate = targetDates[index];
+    if (!availableSet.has(currentDate)) {
+      break;
+    }
+
+    if (dates.length > 0 && intervalDays !== null) {
+      const expected = offsetDate(previous, intervalDays);
+      if (expected !== currentDate) {
+        break;
+      }
+    }
+
+    dates.push(currentDate);
+    previous = currentDate;
+  }
+
+  return dates;
+}
+
+function findLongestRun(targetDates, availableSet, intervalDays) {
+  let best = { count: 0, dates: [] };
+
+  for (let index = 0; index < targetDates.length; index += 1) {
+    const currentDate = targetDates[index];
+    if (!availableSet.has(currentDate)) {
+      continue;
+    }
+
+    const run = collectRun(targetDates, index, availableSet, intervalDays);
+    if (run.length > best.count) {
+      best = {
+        count: run.length,
+        dates: run
+      };
+    }
+  }
+
+  if (best.count === 0) {
+    return null;
+  }
+
+  return {
+    startDate: best.dates[0],
+    count: best.count,
+    dates: best.dates
+  };
+}
+
+function findNextAvailableSeries(plan, recurrence, bookingMap) {
+  const totalOccurrences = plan.targetDates.length;
+  if (totalOccurrences === 0) {
+    return null;
+  }
+
+  const startDate = plan.startDate;
+  const endLimit = offsetDate(startDate, PREVIEW_LOOKAHEAD_DAYS);
+
+  for (let offset = 0; offset <= PREVIEW_LOOKAHEAD_DAYS; offset += 1) {
+    const candidateStart = offsetDate(startDate, offset);
+    if (candidateStart > endLimit) {
+      break;
+    }
+
+    const candidateDates = recurrence
+      ? generateRecurrenceDates(candidateStart, recurrence)
+      : [candidateStart];
+
+    const hasConflict = candidateDates.some((date) => bookingMap.has(date));
+    if (!hasConflict) {
+      return {
+        startDate: candidateStart,
+        dates: candidateDates
+      };
+    }
+  }
+
+  return null;
+}
+
+function partitionBookingsBySeries(bookings, seriesId, fromDate) {
+  const keep = [];
+  const removed = [];
+
+  bookings.forEach((booking) => {
+    if (
+      booking.seriesId === seriesId &&
+      typeof booking.date === "string" &&
+      booking.date >= fromDate
+    ) {
+      removed.push(booking);
+    } else {
+      keep.push(booking);
+    }
+  });
+
+  return [keep, removed];
+}
 function isAdminPasswordConfigured() {
   return ADMIN_PASSWORD.length > 0;
 }
@@ -424,4 +778,64 @@ function requireAdmin(req, res, next) {
   }
 
   next();
+}
+
+function normalizeRecurrence(candidate) {
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+
+  const { frequency, count } = candidate;
+  if (frequency !== "daily" && frequency !== "weekly") {
+    throw new Error('Recurrence frequency must be either "daily" or "weekly".');
+  }
+
+  const parsedCount = Number(count);
+  if (!Number.isFinite(parsedCount)) {
+    throw new Error("Recurrence count must be a number.");
+  }
+
+  const normalizedCount = Math.trunc(parsedCount);
+  if (normalizedCount < 1) {
+    throw new Error("Recurrence count must be at least 1.");
+  }
+  if (normalizedCount > MAX_RECURRENCE_OCCURRENCES) {
+    throw new Error(
+      `Recurrence count must not exceed ${MAX_RECURRENCE_OCCURRENCES}.`
+    );
+  }
+
+  if (normalizedCount === 1) {
+    return null;
+  }
+
+  return {
+    frequency,
+    count: normalizedCount
+  };
+}
+
+function generateRecurrenceDates(startDate, recurrence) {
+  if (!recurrence) {
+    return [startDate];
+  }
+
+  const intervalDays = recurrence.frequency === "daily" ? 1 : 7;
+  const dates = [];
+
+  for (let index = 0; index < recurrence.count; index += 1) {
+    const offsetDays = index * intervalDays;
+    dates.push(offsetDate(startDate, offsetDays));
+  }
+
+  return dates;
+}
+
+function offsetDate(startDate, offsetDays) {
+  const reference = new Date(`${startDate}T00:00:00Z`);
+  if (Number.isNaN(reference.getTime())) {
+    throw new Error(`Cannot offset invalid date: ${startDate}`);
+  }
+  reference.setUTCDate(reference.getUTCDate() + offsetDays);
+  return reference.toISOString().slice(0, 10);
 }

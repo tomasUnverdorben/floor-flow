@@ -22,6 +22,24 @@
   flex-wrap: wrap;
 }
 
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.app-logo {
+  width: 80px;
+  height: 80px;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 20px;
+  background: #ffffff;
+  padding: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 16px 28px rgba(15, 23, 42, 0.12);
+}
+
 .app-header h1 {
   margin: 0;
   font-size: clamp(1.8rem, 2vw, 2.3rem);
@@ -447,6 +465,16 @@
   .editor-grid {
     grid-template-columns: 1fr;
   }
+  .app-brand {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .app-logo {
+    width: 64px;
+    height: 64px;
+    padding: 8px;
+  }
 }
 
 .editor-actions {
@@ -482,6 +510,116 @@
   outline: none;
   border-color: #2563eb;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+}
+
+.booking-form select {
+  border-radius: 12px;
+  border: 1px solid #d0d5dd;
+  padding: 12px 14px;
+  background: #ffffff;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.booking-form select:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+}
+
+.booking-form input:disabled,
+.booking-form select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.booking-form .field-hint {
+  font-weight: 400;
+  color: #667085;
+  font-size: 0.85rem;
+}
+
+.booking-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.booking-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.conflict-banner {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px solid #fecdca;
+  background: #fff5f5;
+  color: #b42318;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.conflict-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.conflict-list {
+  padding-left: 18px;
+  margin: 0;
+  list-style: disc inside;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #b42318;
+}
+
+.preview-summary {
+  margin-top: 18px;
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid #e4e7ec;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.preview-summary h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: #1d2939;
+}
+
+.preview-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #2563eb;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-button:hover {
+  color: #1d4ed8;
+}
+
+.link-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  text-decoration: none;
 }
 
 .primary,

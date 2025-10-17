@@ -65,8 +65,14 @@ Bookings are stored in `server/data/bookings.json`. You usually do not need to t
 | PUT    | `/api/seats/:seatId`       | Updates the parameters of an existing seat                      |
 | DELETE | `/api/seats/:seatId`       | Removes a seat if it has no active bookings                     |
 | GET    | `/api/bookings?date=...`   | Returns bookings for the selected date (`YYYY-MM-DD`)           |
-| POST   | `/api/bookings`            | Creates a booking `{ seatId, date, userName }`                  |
+| POST   | `/api/bookings`            | Creates a booking `{ seatId, date, userName, recurrence?, skipConflicts? }` (`recurrence.frequency` = `daily`/`weekly`, `recurrence.count` up to 52) |
+| POST   | `/api/bookings/preview`    | Returns availability & suggestions for a potential booking (no data is saved) |
 | DELETE | `/api/bookings/:bookingId` | Cancels an existing booking                                     |
+| DELETE | `/api/bookings/series/:seriesId` | Cancels all future occurrences that belong to the given series |
+
+Recurring bookings are supported via the UI and API. Supply an optional `recurrence` object when calling `POST /api/bookings` to repeat the reservation daily or weekly for up to 52 total occurrences (the selected date counts as the first occurrence). By default, the API is all-or-nothing: if any requested date is already booked, the request returns `409 Conflict` together with the conflicting dates and a preview payload.
+
+Pass `skipConflicts: true` when calling `POST /api/bookings` to store only the free dates. The response includes `created`, `skipped`, and `conflicts` arrays (plus a preview summary) so the UI can surface what happened. To inspect availability before creating anything, call `POST /api/bookings/preview`; the payload mirrors `POST /api/bookings` and returns which dates are free, which ones conflict, and suggestions like shortening the series or shifting the start. Each successful booking call returns a `seriesId` so users can later invoke `DELETE /api/bookings/series/:seriesId` to drop the remaining occurrences in bulk.
 
 ## Future improvement ideas
 
