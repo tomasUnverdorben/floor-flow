@@ -1,6 +1,6 @@
 # FloorFlow - shared desk reservation app
 
-![FloorFlow logo](client/public/logo.png)
+![FloorFlow logo](images/logo_transparent.png)
 
 FloorFlow renders an interactive office floor plan so teammates can reserve shared desks. The backend runs on Node.js/Express with JSON file persistence, and the frontend is built with React (Vite + TypeScript).
 
