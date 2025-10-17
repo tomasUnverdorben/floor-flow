@@ -11,10 +11,12 @@ const PORT = process.env.PORT || 4000;
 const DATA_DIR = path.join(__dirname, "data");
 const SEATS_FILE = path.join(DATA_DIR, "seats.json");
 const BOOKINGS_FILE = path.join(DATA_DIR, "bookings.json");
+const CANCELLATIONS_FILE = path.join(DATA_DIR, "cancellations.json");
 const CLIENT_BUILD_DIR = path.join(__dirname, "..", "client", "dist");
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ? String(process.env.ADMIN_PASSWORD) : "";
 const MAX_RECURRENCE_OCCURRENCES = 52;
 const PREVIEW_LOOKAHEAD_DAYS = 365;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 app.use(cors());
 app.use(express.json());
@@ -31,7 +33,8 @@ async function ensureDataFiles() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   const defaultFiles = [
     { file: SEATS_FILE, fallback: "[]" },
-    { file: BOOKINGS_FILE, fallback: "[]" }
+    { file: BOOKINGS_FILE, fallback: "[]" },
+    { file: CANCELLATIONS_FILE, fallback: "[]" }
   ];
 
   await Promise.all(
@@ -65,6 +68,18 @@ async function readJson(file, fallback) {
 
 async function writeJson(file, value) {
   await fs.writeFile(file, JSON.stringify(value, null, 2), "utf8");
+}
+
+async function appendCancellation(entries) {
+  const cancellations = await readJson(CANCELLATIONS_FILE, []);
+  const payload = Array.isArray(entries) ? entries : [entries];
+  cancellations.push(
+    ...payload.map((entry) => ({
+      ...entry,
+      cancelledAt: entry.cancelledAt ?? new Date().toISOString()
+    }))
+  );
+  await writeJson(CANCELLATIONS_FILE, cancellations);
 }
 
 function normalizeDate(input) {
@@ -105,6 +120,10 @@ function normalizeText(value) {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function getTodayDateString() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 app.get("/api/seats", async (_req, res, next) => {
@@ -475,6 +494,14 @@ app.delete("/api/bookings/:bookingId", async (req, res, next) => {
     const [removedBooking] = bookings.splice(bookingIndex, 1);
     await writeJson(BOOKINGS_FILE, bookings);
 
+    await appendCancellation({
+      bookingId: removedBooking.id,
+      seatId: removedBooking.seatId,
+      date: removedBooking.date,
+      userName: removedBooking.userName,
+      source: "single"
+    });
+
     res.json({ removed: removedBooking });
   } catch (error) {
     next(error);
@@ -500,6 +527,17 @@ app.delete("/api/bookings/series/:seriesId", async (req, res, next) => {
     }
 
     await writeJson(BOOKINGS_FILE, remaining);
+    if (removed.length > 0) {
+      await appendCancellation(
+        removed.map((booking) => ({
+          bookingId: booking.id,
+          seatId: booking.seatId,
+          date: booking.date,
+          userName: booking.userName,
+          source: "series"
+        }))
+      );
+    }
     res.json({
       seriesId,
       removed: removed.map((booking) => ({
@@ -509,6 +547,195 @@ app.delete("/api/bookings/series/:seriesId", async (req, res, next) => {
         userName: booking.userName
       }))
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/analytics/summary", async (req, res, next) => {
+  try {
+    const fromParam = typeof req.query.from === "string" ? req.query.from : null;
+    const toParam = typeof req.query.to === "string" ? req.query.to : null;
+
+    const fromDate = fromParam ? normalizeDate(fromParam) : null;
+    const toDate = toParam ? normalizeDate(toParam) : null;
+
+    if (fromParam && !fromDate) {
+      return res.status(400).json({ message: "Parameter 'from' must be a valid date." });
+    }
+
+    if (toParam && !toDate) {
+      return res.status(400).json({ message: "Parameter 'to' must be a valid date." });
+    }
+
+    if (fromDate && toDate && fromDate > toDate) {
+      return res.status(400).json({ message: "'from' must not be after 'to'." });
+    }
+
+    const [bookings, seats, cancellations] = await Promise.all([
+      readJson(BOOKINGS_FILE, []),
+      readJson(SEATS_FILE, []),
+      readJson(CANCELLATIONS_FILE, [])
+    ]);
+
+    const seatMap = new Map(seats.map((seat) => [seat.id, seat]));
+
+    const candidateDates = [];
+    bookings.forEach((booking) => {
+      if (typeof booking.date === "string") {
+        candidateDates.push(booking.date);
+      }
+      if (typeof booking.createdAt === "string") {
+        const createdDate = normalizeDate(booking.createdAt);
+        if (createdDate) {
+          candidateDates.push(createdDate);
+        }
+      }
+    });
+    cancellations.forEach((entry) => {
+      if (typeof entry.date === "string") {
+        candidateDates.push(entry.date);
+      }
+      if (typeof entry.cancelledAt === "string") {
+        const cancelledDate = normalizeDate(entry.cancelledAt);
+        if (cancelledDate) {
+          candidateDates.push(cancelledDate);
+        }
+      }
+    });
+
+    const sortedCandidates = candidateDates.filter(Boolean).sort();
+    const fallbackStart = sortedCandidates[0] ?? getTodayDateString();
+    const fallbackEnd =
+      sortedCandidates.length > 0
+        ? sortedCandidates[sortedCandidates.length - 1]
+        : getTodayDateString();
+
+    const rangeStart = fromDate ?? fallbackStart;
+    const rangeEnd = toDate ?? fallbackEnd;
+
+    const daysInRange = Math.max(
+      1,
+      Math.floor(
+        (new Date(rangeEnd).setUTCHours(0, 0, 0, 0) -
+          new Date(rangeStart).setUTCHours(0, 0, 0, 0)) /
+          MS_PER_DAY
+      ) + 1
+    );
+
+    const activeBookings = bookings.filter((booking) => {
+      const bookingDate = typeof booking.date === "string" ? booking.date : null;
+      if (!bookingDate) {
+        return false;
+      }
+      if (bookingDate < rangeStart) {
+        return false;
+      }
+      if (bookingDate > rangeEnd) {
+        return false;
+      }
+      return true;
+    });
+
+    const createdInRange = bookings.filter((booking) => {
+      const creationDate =
+        typeof booking.createdAt === "string" ? normalizeDate(booking.createdAt) : null;
+      if (!creationDate) {
+        return false;
+      }
+      if (creationDate < rangeStart) {
+        return false;
+      }
+      if (creationDate > rangeEnd) {
+        return false;
+      }
+      return true;
+    });
+
+    const cancellationsInRange = cancellations.filter((entry) => {
+      const cancelledDate =
+        typeof entry.cancelledAt === "string" ? normalizeDate(entry.cancelledAt) : null;
+      if (!cancelledDate) {
+        return false;
+      }
+      if (cancelledDate < rangeStart) {
+        return false;
+      }
+      if (cancelledDate > rangeEnd) {
+        return false;
+      }
+      return true;
+    });
+
+    const uniqueUsers = new Set(
+      activeBookings
+        .map((booking) => booking.userName)
+        .filter((name) => typeof name === "string" && name.trim().length > 0)
+    );
+
+    const accumulateCounts = (items, keySelector) => {
+      const counts = new Map();
+      items.forEach((item) => {
+        const key = keySelector(item);
+        if (!key) {
+          return;
+        }
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      });
+      return counts;
+    };
+
+    const seatCounts = accumulateCounts(activeBookings, (booking) => booking.seatId);
+    const topSeats = Array.from(seatCounts.entries())
+      .map(([seatId, count]) => ({
+        seatId,
+        label: seatMap.get(seatId)?.label ?? seatId,
+        count
+      }))
+      .sort((a, b) => b.count - a.count || a.seatId.localeCompare(b.seatId))
+      .slice(0, 5);
+
+    const userCounts = accumulateCounts(activeBookings, (booking) => booking.userName);
+    const topUsers = Array.from(userCounts.entries())
+      .map(([userName, count]) => ({ userName, count }))
+      .sort((a, b) => b.count - a.count || a.userName.localeCompare(b.userName))
+      .slice(0, 5);
+
+    const cancellationCounts = accumulateCounts(
+      cancellationsInRange,
+      (entry) => entry.userName
+    );
+    const topCancellations = Array.from(cancellationCounts.entries())
+      .map(([userName, count]) => ({ userName, count }))
+      .sort((a, b) => b.count - a.count || a.userName.localeCompare(b.userName))
+      .slice(0, 5);
+
+    const dayCounts = accumulateCounts(activeBookings, (booking) => booking.date);
+    const busiestDays = Array.from(dayCounts.entries())
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => b.count - a.count || a.date.localeCompare(b.date))
+      .slice(0, 7);
+
+    const summary = {
+      range: {
+        from: rangeStart,
+        to: rangeEnd,
+        days: daysInRange
+      },
+      totals: {
+        created: createdInRange.length,
+        canceled: cancellationsInRange.length,
+        active: activeBookings.length,
+        uniqueUsers: uniqueUsers.size
+      },
+      topSeats,
+      topUsers,
+      topCancellations,
+      busiestDays,
+      averageDailyBookings: activeBookings.length / daysInRange
+    };
+
+    res.json(summary);
   } catch (error) {
     next(error);
   }

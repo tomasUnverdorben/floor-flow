@@ -1,5 +1,6 @@
-import type { CSSProperties, FormEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { CSSProperties, ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import "./App.css";
 
 type Seat = {
@@ -61,6 +62,21 @@ type BookingPreview = {
   };
 };
 
+type AnalyticsSummary = {
+  range: { from: string | null; to: string | null; days: number };
+  totals: {
+    created: number;
+    canceled: number;
+    active: number;
+    uniqueUsers: number;
+  };
+  topSeats: Array<{ seatId: string; label: string; count: number }>;
+  topUsers: Array<{ userName: string; count: number }>;
+  topCancellations: Array<{ userName: string; count: number }>;
+  busiestDays: Array<{ date: string; count: number }>;
+  averageDailyBookings: number;
+};
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const ADMIN_UNAUTHORIZED_ERROR = "ADMIN_UNAUTHORIZED";
 const MAX_RECURRENCE_OCCURRENCES = 52;
@@ -80,6 +96,12 @@ const formatDateForDisplay = (value: string) => {
 };
 
 const getToday = () => new Date().toISOString().slice(0, 10);
+
+const getDateNDaysAgo = (days: number) => {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  return date.toISOString().slice(0, 10);
+};
 
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
 const normalizeCoordinate = (value: number) => Math.round(clamp(value, 0, 100) * 10) / 10;
@@ -241,9 +263,19 @@ const extractPreview = (payload: unknown): BookingPreview | null => {
   };
 };
 
-function App() {
+function MainDashboard() {
+  const navigate = useNavigate();
   const [seats, setSeats] = useState<Seat[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [allBookings, setAllBookings] = useState<Booking[]>([]);
+  const [isLoadingAllBookings, setIsLoadingAllBookings] = useState(true);
+  const [selectedUserName, setSelectedUserName] = useState<string | null>(null);
+  const [bookingActionInFlight, setBookingActionInFlight] = useState<{
+    bookingId: string;
+    type: "cancel" | "move";
+  } | null>(null);
+  const [bookingBeingRescheduledId, setBookingBeingRescheduledId] = useState<string | null>(null);
+  const [moveTargets, setMoveTargets] = useState<Record<string, string>>({});
   const [selectedSeatId, setSelectedSeatId] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>(getToday());
   const [nameInput, setNameInput] = useState<string>("");
@@ -472,9 +504,33 @@ function App() {
     }
   }, []);
 
+  const fetchAllBookings = useCallback(async () => {
+    setIsLoadingAllBookings(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/bookings`);
+      if (!response.ok) {
+        throw new Error(`Failed to load bookings (status ${response.status})`);
+      }
+      const bookingPayload: Booking[] = await response.json();
+      setAllBookings(bookingPayload);
+    } catch (error) {
+      console.error(error);
+      setStatusBanner({
+        type: "error",
+        message: "Failed to load the full booking list. Please try again."
+      });
+    } finally {
+      setIsLoadingAllBookings(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchSeats();
   }, [fetchSeats]);
+
+  useEffect(() => {
+    fetchAllBookings();
+  }, [fetchAllBookings]);
 
   useEffect(() => {
     const loadBookings = async (date: string) => {
@@ -487,6 +543,10 @@ function App() {
         }
         const bookingPayload: Booking[] = await response.json();
         setBookings(bookingPayload);
+        setAllBookings((existing) => {
+          const filtered = existing.filter((booking) => booking.date !== date);
+          return [...filtered, ...bookingPayload];
+        });
       } catch (error) {
         console.error(error);
         setStatusBanner({
@@ -684,11 +744,279 @@ function App() {
     };
   }, [draggingSeatId, handleAdminUnauthorized, isEditorMode, selectedSeatId, updateSeatOnServer]);
 
-  const anyDataLoading = isLoadingSeats || isLoadingBookings;
+  const anyDataLoading = isLoadingSeats || isLoadingBookings || isLoadingAllBookings;
 
   const sortedBookings = useMemo(
     () => [...bookings].sort((a, b) => a.seatId.localeCompare(b.seatId)),
     [bookings]
+  );
+
+  const seatById = useMemo(() => {
+    const lookup = new Map<string, Seat>();
+    seats.forEach((seat) => {
+      lookup.set(seat.id, seat);
+    });
+    return lookup;
+  }, [seats]);
+
+  const usersWithBookings = useMemo(
+    () =>
+      Array.from(
+        allBookings.reduce((carry, booking) => {
+          if (!carry.has(booking.userName)) {
+            carry.set(booking.userName, []);
+          }
+          carry.get(booking.userName)!.push(booking);
+          return carry;
+        }, new Map<string, Booking[]>())
+      )
+        .map(([userName, userBookings]) => ({
+          userName,
+          bookings: [...userBookings].sort((a, b) => {
+            const dateDiff = a.date.localeCompare(b.date);
+            if (dateDiff !== 0) {
+              return dateDiff;
+            }
+            return a.seatId.localeCompare(b.seatId);
+          })
+        }))
+        .sort((a, b) => a.userName.localeCompare(b.userName, undefined, { sensitivity: "base" })),
+    [allBookings]
+  );
+
+  useEffect(() => {
+    setSelectedUserName((current) => {
+      if (current && usersWithBookings.some((entry) => entry.userName === current)) {
+        return current;
+      }
+      return null;
+    });
+  }, [usersWithBookings]);
+
+  const selectedUserBookings = useMemo(() => {
+    if (!selectedUserName) {
+      return [];
+    }
+    const entry = usersWithBookings.find((user) => user.userName === selectedUserName);
+    return entry ? entry.bookings : [];
+  }, [selectedUserName, usersWithBookings]);
+
+  const getAvailableSeatsForBooking = useCallback(
+    (booking: Booking) => {
+      const occupiedSeats = new Set(
+        allBookings
+          .filter((entry) => entry.date === booking.date && entry.id !== booking.id)
+          .map((entry) => entry.seatId)
+      );
+      return seats.filter((seat) => !occupiedSeats.has(seat.id));
+    },
+    [allBookings, seats]
+  );
+
+  const handleMoveTargetChange = useCallback((bookingId: string, seatId: string) => {
+    setMoveTargets((current) => ({
+      ...current,
+      [bookingId]: seatId
+    }));
+  }, []);
+
+  const handleStartMoveBooking = useCallback(
+    (booking: Booking) => {
+      if (bookingBeingRescheduledId === booking.id) {
+        setBookingBeingRescheduledId(null);
+        setMoveTargets((current) => {
+          if (!(booking.id in current)) {
+            return current;
+          }
+          const { [booking.id]: _removed, ...rest } = current;
+          return rest;
+        });
+        return;
+      }
+
+      const alternatives = getAvailableSeatsForBooking(booking).filter(
+        (seat) => seat.id !== booking.seatId
+      );
+
+      if (alternatives.length === 0) {
+        setStatusBanner({
+          type: "info",
+          message: `No alternative seats are free on ${formatDateForDisplay(booking.date)}.`
+        });
+        return;
+      }
+
+      setBookingBeingRescheduledId(booking.id);
+      setMoveTargets((current) => ({
+        ...current,
+        [booking.id]: alternatives[0].id
+      }));
+    },
+    [bookingBeingRescheduledId, getAvailableSeatsForBooking, setStatusBanner]
+  );
+
+  const handleCancelUserBooking = useCallback(
+    async (booking: Booking) => {
+      setBookingActionInFlight({ bookingId: booking.id, type: "cancel" });
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/bookings/${booking.id}`, {
+          method: "DELETE"
+        });
+
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(
+            payload && typeof payload === "object" && typeof (payload as Record<string, unknown>).message === "string"
+              ? ((payload as Record<string, unknown>).message as string)
+              : `Canceling the booking failed (status ${response.status}).`
+          );
+        }
+
+        setBookings((existing) => existing.filter((entry) => entry.id !== booking.id));
+        setAllBookings((existing) => existing.filter((entry) => entry.id !== booking.id));
+        setStatusBanner({
+          type: "info",
+          message: `Booking for ${booking.userName} on ${formatDateForDisplay(
+            booking.date
+          )} has been canceled.`
+        });
+      } catch (error) {
+        console.error(error);
+        setStatusBanner({
+          type: "error",
+          message:
+            error instanceof Error ? error.message : "Failed to cancel the booking."
+        });
+      } finally {
+        setBookingActionInFlight(null);
+        if (bookingBeingRescheduledId === booking.id) {
+          setBookingBeingRescheduledId(null);
+          setMoveTargets((current) => {
+            if (!(booking.id in current)) {
+              return current;
+            }
+            const { [booking.id]: _removed, ...rest } = current;
+            return rest;
+          });
+        }
+      }
+    },
+    [bookingBeingRescheduledId, setStatusBanner]
+  );
+
+  const handleMoveBooking = useCallback(
+    async (booking: Booking, targetSeatId: string) => {
+      if (!targetSeatId || targetSeatId === booking.seatId) {
+        setStatusBanner({
+          type: "info",
+          message: "Select a different seat to move the booking."
+        });
+        return;
+      }
+
+      setBookingActionInFlight({ bookingId: booking.id, type: "move" });
+
+      try {
+        const createResponse = await fetch(`${API_BASE_URL}/api/bookings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            seatId: targetSeatId,
+            date: booking.date,
+            userName: booking.userName
+          })
+        });
+
+        const createPayload = await createResponse.json().catch(() => ({}));
+
+        if (!createResponse.ok) {
+          throw new Error(
+            createPayload && typeof createPayload === "object" && typeof (createPayload as Record<string, unknown>).message === "string"
+              ? ((createPayload as Record<string, unknown>).message as string)
+              : `Failed to create replacement booking (status ${createResponse.status}).`
+          );
+        }
+
+        const createdBookings = extractCreatedBookings(createPayload);
+        if (createdBookings.length === 0) {
+          throw new Error("Booking move succeeded but the server response was unexpected.");
+        }
+
+        const replacement =
+          createdBookings.find(
+            (entry) => entry.date === booking.date && entry.seatId === targetSeatId
+          ) ?? createdBookings[0];
+
+        const deleteResponse = await fetch(`${API_BASE_URL}/api/bookings/${booking.id}`, {
+          method: "DELETE"
+        });
+
+        if (!deleteResponse.ok) {
+          const deletePayload = await deleteResponse.json().catch(() => ({}));
+          if (replacement) {
+            await fetch(`${API_BASE_URL}/api/bookings/${replacement.id}`, {
+              method: "DELETE"
+            }).catch((rollbackError) => {
+              console.error("Failed to roll back replacement booking", rollbackError);
+            });
+          }
+          throw new Error(
+            deletePayload && typeof deletePayload === "object" && typeof (deletePayload as Record<string, unknown>).message === "string"
+              ? ((deletePayload as Record<string, unknown>).message as string)
+              : `Failed to remove the original booking (status ${deleteResponse.status}).`
+          );
+        }
+
+        setAllBookings((existing) => {
+          const withoutOriginal = existing.filter(
+            (entry) =>
+              entry.id !== booking.id &&
+              !createdBookings.some((created) => created.id === entry.id)
+          );
+          return [...withoutOriginal, ...createdBookings];
+        });
+
+        if (booking.date === selectedDate) {
+          setBookings((existing) => {
+            const withoutOriginal = existing.filter(
+              (entry) =>
+                entry.id !== booking.id &&
+                !createdBookings.some((created) => created.id === entry.id)
+            );
+            const replacementsForDate = createdBookings.filter(
+              (entry) => entry.date === selectedDate
+            );
+            return [...withoutOriginal, ...replacementsForDate];
+          });
+        } else {
+          setBookings((existing) => existing.filter((entry) => entry.id !== booking.id));
+        }
+
+        setStatusBanner({
+          type: "success",
+          message: `Booking moved to ${
+            seatById.get(targetSeatId)?.label ?? targetSeatId
+          } for ${formatDateForDisplay(booking.date)}.`
+        });
+      } catch (error) {
+        console.error(error);
+        setStatusBanner({
+          type: "error",
+          message: error instanceof Error ? error.message : "Failed to move the booking."
+        });
+      } finally {
+        setBookingActionInFlight(null);
+        setBookingBeingRescheduledId(null);
+        setMoveTargets((current) => {
+          if (!(booking.id in current)) {
+            return current;
+          }
+          const { [booking.id]: _removed, ...rest } = current;
+          return rest;
+        });
+      }
+    },
+    [seatById, selectedDate, setStatusBanner]
   );
 
   const floorplanContentStyle = useMemo<CSSProperties>(() => {
@@ -1263,6 +1591,13 @@ function App() {
           });
         }
 
+        setAllBookings((existing) => {
+          const filtered = existing.filter(
+            (booking) => !createdBookings.some((created) => created.id === booking.id)
+          );
+          return [...filtered, ...createdBookings];
+        });
+
         setConflictContext(null);
 
         const previewFromPayload =
@@ -1313,6 +1648,7 @@ function App() {
       selectedDate,
       selectedSeat,
       setBookings,
+      setAllBookings,
       setStatusBanner,
       setConflictContext,
       setBookingPreview
@@ -1482,6 +1818,9 @@ function App() {
       setBookings((existing) =>
         existing.filter((booking) => booking.id !== selectedSeatBooking.id)
       );
+      setAllBookings((existing) =>
+        existing.filter((booking) => booking.id !== selectedSeatBooking.id)
+      );
       setConflictContext(null);
       setStatusBanner({
         type: "info",
@@ -1538,6 +1877,11 @@ function App() {
 
       if (removed.length > 0) {
         setBookings((existing) =>
+          existing.filter(
+            (booking) => !removed.some((entry) => entry.id === booking.id)
+          )
+        );
+        setAllBookings((existing) =>
           existing.filter(
             (booking) => !removed.some((entry) => entry.id === booking.id)
           )
@@ -1600,6 +1944,13 @@ function App() {
             onClick={handleToggleEditorMode}
           >
             {isEditorMode ? "Exit editing" : "Edit mode"}
+          </button>
+          <button
+            type="button"
+            className="toolbar-button subtle"
+            onClick={() => navigate("/stats")}
+          >
+            Statistics
           </button>
           {isEditorMode ? (
             <>
@@ -2208,31 +2559,461 @@ function App() {
             </div>
 
             <div className="sidebar-section">
-            <h3>Bookings on this day</h3>
-            {anyDataLoading ? (
-              <p className="muted">Loading...</p>
-            ) : sortedBookings.length === 0 ? (
-              <p className="muted">No bookings yet.</p>
+              <h3>Bookings on this day</h3>
+              {anyDataLoading ? (
+                <p className="muted">Loading…</p>
+              ) : sortedBookings.length === 0 ? (
+                <p className="muted">No bookings yet.</p>
+              ) : (
+                <ul className="booking-list">
+                  {sortedBookings.map((booking) => {
+                    const seat = seats.find((item) => item.id === booking.seatId);
+                    return (
+                      <li key={booking.id}>
+                        <span className="booking-seat">
+                          {seat ? seat.label : booking.seatId}
+                        </span>
+                        <span className="booking-user">{booking.userName}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+          </div>
+        </section>
+
+        <section className="user-reservations-section">
+          <div className="sidebar-section user-list-section">
+            <h3>Users with reservations</h3>
+            {isLoadingAllBookings ? (
+              <p className="muted">Loading…</p>
+            ) : usersWithBookings.length === 0 ? (
+              <p className="muted">Nobody has a reservation yet.</p>
             ) : (
-              <ul className="booking-list">
-                {sortedBookings.map((booking) => {
-                  const seat = seats.find((item) => item.id === booking.seatId);
+              <div className="user-chip-list">
+                {usersWithBookings.map((user) => {
+                  const isSelected = selectedUserName === user.userName;
                   return (
-                    <li key={booking.id}>
-                      <span className="booking-seat">
-                        {seat ? seat.label : booking.seatId}
-                      </span>
-                      <span className="booking-user">{booking.userName}</span>
-                    </li>
+                    <button
+                      key={user.userName}
+                      type="button"
+                      className={`user-chip${isSelected ? " user-selected" : ""}`}
+                      onClick={() =>
+                        setSelectedUserName((current) =>
+                          current === user.userName ? null : user.userName
+                        )
+                      }
+                      aria-pressed={isSelected}
+                    >
+                      <span className="user-name">{user.userName}</span>
+                      <span className="user-count">{user.bookings.length}</span>
+                    </button>
                   );
                 })}
-              </ul>
+              </div>
             )}
-            </div>
+          </div>
+
+          <div className="sidebar-section user-detail-section">
+            {selectedUserName && selectedUserBookings.length > 0 ? (
+              <>
+                <div className="user-booking-summary">
+                  <h4>{selectedUserName}</h4>
+                  <span className="user-booking-total">
+                    {selectedUserBookings.length} booking
+                    {selectedUserBookings.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <ul className="user-booking-list">
+                  {selectedUserBookings.map((booking) => {
+                    const seatLabel = seatById.get(booking.seatId)?.label ?? booking.seatId;
+                    const availableSeats = getAvailableSeatsForBooking(booking).filter(
+                      (seat) => seat.id !== booking.seatId
+                    );
+                    const isBusy = bookingActionInFlight?.bookingId === booking.id;
+                    const moveModeActive = bookingBeingRescheduledId === booking.id;
+                    const moveTarget =
+                      moveTargets[booking.id] ?? (availableSeats[0]?.id ?? "");
+
+                    return (
+                      <li key={booking.id} className="user-booking-item">
+                        <div className="user-booking-info">
+                          <span className="user-booking-date">
+                            {formatDateForDisplay(booking.date)}
+                          </span>
+                          <span className="user-booking-seat">
+                            Seat: <strong>{seatLabel}</strong>
+                          </span>
+                          {booking.seriesId ? (
+                            <span className="user-booking-series">Recurring</span>
+                          ) : null}
+                        </div>
+                        {moveModeActive ? (
+                          availableSeats.length === 0 ? (
+                            <div className="user-booking-actions">
+                              <p className="muted">No alternative seats available.</p>
+                              <button
+                                type="button"
+                                className="link-button"
+                                onClick={() => handleStartMoveBooking(booking)}
+                              >
+                                Close
+                              </button>
+                            </div>
+                          ) : (
+                            <form
+                              className="user-move-form"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                if (!moveTarget) {
+                                  return;
+                                }
+                                void handleMoveBooking(booking, moveTarget);
+                              }}
+                            >
+                              <label className="user-move-select">
+                                <span>New seat</span>
+                                <select
+                                  value={moveTarget}
+                                  onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+                                    handleMoveTargetChange(booking.id, event.target.value)
+                                  }
+                                  disabled={isBusy}
+                                >
+                                  {availableSeats.map((seat) => (
+                                    <option key={seat.id} value={seat.id}>
+                                      {seat.label ? `${seat.label} (${seat.id})` : seat.id}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <div className="user-move-actions">
+                                <button
+                                  type="submit"
+                                  className="primary"
+                                  disabled={isBusy || !moveTarget}
+                                >
+                                  {isBusy && bookingActionInFlight?.type === "move"
+                                    ? "Moving…"
+                                    : "Move booking"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  disabled={isBusy}
+                                  onClick={() => handleStartMoveBooking(booking)}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          )
+                        ) : (
+                          <div className="user-booking-actions">
+                            <button
+                              type="button"
+                              className="link-button"
+                              disabled={isBusy || availableSeats.length === 0}
+                              onClick={() => handleStartMoveBooking(booking)}
+                            >
+                              {availableSeats.length === 0
+                                ? "No free seats"
+                                : "Move to another seat"}
+                            </button>
+                            <button
+                              type="button"
+                              className="danger-link"
+                              disabled={isBusy}
+                              onClick={() => void handleCancelUserBooking(booking)}
+                            >
+                              {isBusy && bookingActionInFlight?.type === "cancel"
+                                ? "Canceling…"
+                                : "Cancel day"}
+                            </button>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            ) : (
+              <p className="muted">
+                {usersWithBookings.length === 0
+                  ? "Nobody has a reservation yet."
+                  : "Select a user to manage their reservations."}
+              </p>
+            )}
           </div>
         </section>
       </main>
     </div>
+  );
+}
+
+function StatsPage() {
+  const navigate = useNavigate();
+  const [fromDate, setFromDate] = useState<string>(getDateNDaysAgo(29));
+  const [toDate, setToDate] = useState<string>(getToday());
+  const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchSummary = useCallback(async () => {
+    if (fromDate && toDate && fromDate > toDate) {
+      setError("Start date must be before end date.");
+      setSummary(null);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const params = new URLSearchParams();
+      if (fromDate) {
+        params.set("from", fromDate);
+      }
+      if (toDate) {
+        params.set("to", toDate);
+      }
+
+      const query = params.toString();
+      const response = await fetch(
+        `${API_BASE_URL}/api/analytics/summary${query ? `?${query}` : ""}`
+      );
+      if (!response.ok) {
+        throw new Error(`Failed to load analytics (status ${response.status}).`);
+      }
+      const payload = (await response.json()) as AnalyticsSummary;
+      setSummary(payload);
+    } catch (fetchError) {
+      console.error(fetchError);
+      setError(
+        fetchError instanceof Error ? fetchError.message : "Failed to load analytics."
+      );
+      setSummary(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [fromDate, toDate]);
+
+  useEffect(() => {
+    void fetchSummary();
+  }, [fetchSummary]);
+
+  const handleQuickRange = useCallback((days: number) => {
+    const end = getToday();
+    const start = getDateNDaysAgo(Math.max(days - 1, 0));
+    setToDate(end);
+    setFromDate(start);
+  }, []);
+
+  const topSeats = summary?.topSeats ?? [];
+  const topUsers = summary?.topUsers ?? [];
+  const topCancellations = summary?.topCancellations ?? [];
+  const busiestDays = summary?.busiestDays ?? [];
+
+  return (
+    <div className="stats-shell">
+      <header className="stats-header">
+        <div>
+          <h1>Workspace Analytics</h1>
+          <p>Understand booking patterns, popular seats, and team activity over time.</p>
+        </div>
+        <div className="stats-header-actions">
+          <button
+            type="button"
+            className="toolbar-button subtle"
+            onClick={() => navigate("/")}
+          >
+            Back to map
+          </button>
+        </div>
+      </header>
+
+      <section className="stats-filters">
+        <div className="stats-date-range">
+          <label>
+            From
+            <input
+              type="date"
+              value={fromDate}
+              max={toDate}
+              onChange={(event) => setFromDate(event.target.value)}
+            />
+          </label>
+          <label>
+            To
+            <input
+              type="date"
+              value={toDate}
+              min={fromDate}
+              max={getToday()}
+              onChange={(event) => setToDate(event.target.value)}
+            />
+          </label>
+        </div>
+        <div className="stats-quick-ranges">
+          <span>Quick ranges:</span>
+          <button
+            type="button"
+            className="chip-button"
+            onClick={() => handleQuickRange(7)}
+          >
+            Last 7 days
+          </button>
+          <button
+            type="button"
+            className="chip-button"
+            onClick={() => handleQuickRange(30)}
+          >
+            Last 30 days
+          </button>
+          <button
+            type="button"
+            className="chip-button"
+            onClick={() => handleQuickRange(90)}
+          >
+            Last 90 days
+          </button>
+          <button
+            type="button"
+            className="chip-button"
+            onClick={() => {
+              const now = new Date();
+              const startOfYear = new Date(now.getFullYear(), 0, 1)
+                .toISOString()
+                .slice(0, 10);
+              setFromDate(startOfYear);
+              setToDate(getToday());
+            }}
+          >
+            Year to date
+          </button>
+        </div>
+      </section>
+
+      {error ? (
+        <div className="status-banner status-error">{error}</div>
+      ) : null}
+
+      {isLoading ? (
+        <div className="stats-loading">Loading analytics…</div>
+      ) : summary ? (
+        <div className="stats-content">
+          <section className="stats-overview">
+            <div className="stat-card">
+              <span className="stat-label">Bookings created</span>
+              <span className="stat-value">{summary.totals.created}</span>
+              <span className="stat-hint">during the selected period</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-label">Bookings canceled</span>
+              <span className="stat-value">{summary.totals.canceled}</span>
+              <span className="stat-hint">tracked via cancellations</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-label">Active bookings in range</span>
+              <span className="stat-value">{summary.totals.active}</span>
+              <span className="stat-hint">matching current data set</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-label">Average per day</span>
+              <span className="stat-value">
+                {summary.averageDailyBookings.toFixed(1)}
+              </span>
+              <span className="stat-hint">bookings each day</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-label">Unique people</span>
+              <span className="stat-value">{summary.totals.uniqueUsers}</span>
+              <span className="stat-hint">with reservations</span>
+            </div>
+          </section>
+
+          <section className="stats-grid">
+            <div className="stat-panel">
+              <h3>Top seats</h3>
+              {topSeats.length === 0 ? (
+                <p className="muted">No bookings recorded for this period.</p>
+              ) : (
+                <ul className="stat-list">
+                  {topSeats.map((seat) => (
+                    <li key={seat.seatId}>
+                      <div>
+                        <strong>{seat.label || seat.seatId}</strong>
+                        <span className="muted">Seat ID: {seat.seatId}</span>
+                      </div>
+                      <span className="stat-count">{seat.count}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="stat-panel">
+              <h3>Most active teammates</h3>
+              {topUsers.length === 0 ? (
+                <p className="muted">No reservations for this range.</p>
+              ) : (
+                <ul className="stat-list">
+                  {topUsers.map((user) => (
+                    <li key={user.userName}>
+                      <span>{user.userName}</span>
+                      <span className="stat-count">{user.count}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="stat-panel">
+              <h3>Cancellation leaders</h3>
+              {topCancellations.length === 0 ? (
+                <p className="muted">No cancellations captured in this range.</p>
+              ) : (
+                <ul className="stat-list">
+                  {topCancellations.map((user) => (
+                    <li key={`cancel-${user.userName}`}>
+                      <span>{user.userName}</span>
+                      <span className="stat-count">{user.count}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="stat-panel">
+              <h3>Busiest days</h3>
+              {busiestDays.length === 0 ? (
+                <p className="muted">No activity in the selected window.</p>
+              ) : (
+                <ul className="stat-list">
+                  {busiestDays.map((day) => (
+                    <li key={day.date}>
+                      <span>{formatDateForDisplay(day.date)}</span>
+                      <span className="stat-count">{day.count}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : (
+        <p className="muted">Select a valid range to load analytics.</p>
+      )}
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<MainDashboard />} />
+      <Route path="/stats" element={<StatsPage />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
 
