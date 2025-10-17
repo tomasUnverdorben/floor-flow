@@ -1,3 +1,8 @@
+anchors:
+  mongodb:
+    dbName: &mongodbDbName floorflow
+    username: &mongodbUsername floorflow
+
 replicaCount: 1
 
 image:
@@ -21,6 +26,21 @@ ingress:
           pathType: Prefix
   tls: []
 
+mongodb:
+  enabled: false
+  fullnameOverride: mongodb
+  auth:
+    enabled: true
+    usernames:
+      - *mongodbUsername
+    databases:
+      - *mongodbDbName
+    existingSecret: mongodb-auth
+  service:
+    type: NodePort
+    nodePorts:
+      mongodb: 32017
+
 persistence:
   enabled: true
   accessModes:
@@ -30,7 +50,24 @@ persistence:
 
 resources: {}
 
-env: []
+env:
+  - name: MONGODB_URL
+    value: mongodb:27017
+  - name: MONGODB_USER
+    value: *mongodbUsername
+  - name: MONGODB_DB_NAME
+    value: *mongodbDbName
+
+secretEnv:
+  - name: MONGODB_PASS
+    secretName: mongodb-auth
+    key: mongodb-passwords
+    optional: true
+
+secrets:
+  mongodb:
+    password: start234
+    rootPassword: start234
 
 imagePullSecrets: []
 nameOverride: ""
