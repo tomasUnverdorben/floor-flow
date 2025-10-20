@@ -22,3 +22,13 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
+
+{{- define "floorflow.mongodbHost" -}}
+{{- if and .Values.mongodb.enabled .Values.mongodb.fullnameOverride }}
+{{- .Values.mongodb.fullnameOverride -}}
+{{- else if .Values.mongodb.enabled }}
+{{- printf "%s-mongodb" .Release.Name -}}
+{{- else -}}
+{{- "" -}}
+{{- end -}}
+{{- end -}}

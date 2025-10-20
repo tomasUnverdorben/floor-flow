@@ -29,6 +29,33 @@ spec:
             - name: seats-config
               mountPath: /config/seats.json
               subPath: seats.json
+        {{- if .Values.mongodb.enabled }}
+        - name: wait-for-mongodb
+          image: {{ .Values.mongodb.waitFor.image | quote }}
+          imagePullPolicy: {{ .Values.mongodb.waitFor.pullPolicy }}
+          env:
+            - name: MONGODB_HOST
+              value: "{{ include "floorflow.mongodbHost" . }}"
+            - name: MONGODB_PORT
+              value: "{{ .Values.mongodb.waitFor.port }}"
+            - name: MONGODB_RETRY_SECONDS
+              value: "{{ .Values.mongodb.waitFor.retryIntervalSeconds }}"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              if [ -z "$MONGODB_HOST" ]; then
+                echo "MongoDB host not provided. Skipping wait."
+                exit 0
+              fi
+              port="${MONGODB_PORT:-27017}"
+              retry="${MONGODB_RETRY_SECONDS:-3}"
+              echo "Waiting for MongoDB at ${MONGODB_HOST}:${port}..."
+              until nc -z "$MONGODB_HOST" "$port"; do
+                echo "MongoDB is unavailable - sleeping ${retry}s"
+                sleep "$retry"
+              done
+              echo "MongoDB is available."
+        {{- end }}
       containers:
         - name: floorflow
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

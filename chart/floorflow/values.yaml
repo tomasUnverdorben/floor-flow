@@ -40,6 +40,11 @@ mongodb:
     type: NodePort
     nodePorts:
       mongodb: 32017
+  waitFor:
+    image: busybox:1.36
+    pullPolicy: IfNotPresent
+    port: 27017
+    retryIntervalSeconds: 3
 
 persistence:
   enabled: true
