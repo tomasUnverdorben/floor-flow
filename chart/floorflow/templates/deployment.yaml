@@ -39,6 +39,8 @@ spec:
           env:
             - name: NODE_ENV
               value: "production"
+            - name: MONGODB_ENABLED
+              value: {{ .Values.mongodb.enabled | quote }}
             {{- if .Values.admin.existingSecret }}
             - name: ADMIN_PASSWORD
               valueFrom:
@@ -55,6 +57,14 @@ spec:
             {{- range .Values.env }}
             - name: {{ .name }}
               value: "{{ .value }}"
+            {{- end }}
+            {{- range .Values.secretEnv }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  optional: {{ .optional | default false }}
+                  name: {{ .secretName }}
+                  key: {{ .key }}
             {{- end }}
           volumeMounts:
             - name: data

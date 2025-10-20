@@ -4,6 +4,8 @@ const path = require("path");
 const crypto = require("crypto");
 const { promises: fs } = require("fs");
 const { v4: uuid } = require("uuid");
+const { ObjectId } = require("mongodb");
+const db = import("./db/connection.mjs");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -125,6 +127,61 @@ function normalizeText(value) {
 function getTodayDateString() {
   return new Date().toISOString().slice(0, 10);
 }
+
+app.get("/api/db/seats", async (req, res) => {
+  console.log("fetching seats from mongodb");
+
+  let collection = (await db).default.collection("seats");
+  const seats = await collection.find()
+    .limit(req.query.limit ? parseInt(req.query.limit) : 1)
+    .skip(req.query.offset ? parseInt(req.query.offset) : 0)
+    .toArray();
+
+  const count = await collection.countDocuments({ });
+  const responsePayload = {
+    content: seats,
+    info: {
+      count: count,
+    }
+  };
+
+  res.send(responsePayload)
+    .status(200)
+});
+
+app.post("/api/db/seats", async (req, res) => {
+  console.log(`saving a new seat to mongodb: ${ JSON.stringify(req.body) }`);
+
+  let collection = (await db).default.collection("seats");
+  let seat = req.body;
+
+  await collection.insertOne(seat);
+
+  res.send(seat)
+    .status(201);
+});
+
+app.put("/api/db/seats/:id", async (req, res) => {
+  console.log(`updating seat with id ${ req.params.id } in mongodb with update: ${ JSON.stringify(req.body) }`);
+
+  let collection = (await db).default.collection("seats");
+  let seat = req.body;
+
+  await collection.updateOne({ _id: new ObjectId(req.params.id) }, seat);
+
+  res.send()
+    .status(204);
+});
+
+app.delete("/api/db/seats/:id", async (req, res) => {
+  console.log(`deleting seat with id ${ req.params.id } from mongodb`);
+
+  let collection = (await db).default.collection("seats");
+  await collection.deleteOne({ _id: new ObjectId(req.params.id) });
+
+  res.send()
+    .status(204);
+});
 
 app.get("/api/seats", async (_req, res, next) => {
   try {

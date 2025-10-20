@@ -4,3 +4,9 @@ description: Helm chart for the FloorFlow office seat reservation system
 type: application
 version: 0.1.0
 appVersion: "1.0.0"
+
+dependencies:
+  - name: mongodb
+    version: 18.0.7
+    repository: https://charts.bitnami.com/bitnami
+    condition: mongodb.enabled
