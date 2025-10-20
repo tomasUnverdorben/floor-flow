@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const { promises: fs } = require("fs");
 const { v4: uuid } = require("uuid");
 const { ObjectId } = require("mongodb");
+const logger = require("./logger");
 const db = import("./db/connection.mjs");
 
 const app = express();
@@ -23,6 +24,20 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 app.use(cors());
 app.use(express.json());
 
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on("finish", () => {
+    const durationMs = Date.now() - start;
+    logger.info("HTTP request completed", {
+      method: req.method,
+      path: req.originalUrl,
+      status: res.statusCode,
+      durationMs
+    });
+  });
+  next();
+});
+
 app.use((req, _res, next) => {
   const line = `[${new Date().toISOString()}] ${req.method} ${req.path}\n`;
   fs.appendFile(path.join(DATA_DIR, "debug.log"), line).catch(() => {
@@ -33,6 +48,7 @@ app.use((req, _res, next) => {
 
 async function ensureDataFiles() {
   await fs.mkdir(DATA_DIR, { recursive: true });
+  logger.debug("Ensured data directory exists", { path: DATA_DIR });
   const defaultFiles = [
     { file: SEATS_FILE, fallback: "[]" },
     { file: BOOKINGS_FILE, fallback: "[]" },
@@ -46,6 +62,7 @@ async function ensureDataFiles() {
       } catch (error) {
         if (error.code === "ENOENT") {
           await fs.writeFile(file, fallback, "utf8");
+          logger.info("Created default data file", { file });
         } else {
           throw error;
         }
@@ -57,19 +74,22 @@ async function ensureDataFiles() {
 async function readJson(file, fallback) {
   try {
     const raw = await fs.readFile(file, "utf8");
+    logger.debug("Read JSON file", { file });
     return JSON.parse(raw);
   } catch (error) {
     if (error.code === "ENOENT" && typeof fallback !== "undefined") {
       await writeJson(file, fallback);
+      logger.warn("JSON file missing, created fallback", { file });
       return fallback;
     }
-    console.error(`Failed to read ${file}`, error);
+    logger.error(`Failed to read ${file}`, error);
     throw error;
   }
 }
 
 async function writeJson(file, value) {
   await fs.writeFile(file, JSON.stringify(value, null, 2), "utf8");
+  logger.debug("Wrote JSON file", { file });
 }
 
 async function appendCancellation(entries) {
@@ -82,6 +102,7 @@ async function appendCancellation(entries) {
     }))
   );
   await writeJson(CANCELLATIONS_FILE, cancellations);
+  logger.info("Recorded booking cancellations", { count: payload.length });
 }
 
 function normalizeDate(input) {
@@ -129,63 +150,67 @@ function getTodayDateString() {
 }
 
 app.get("/api/db/seats", async (req, res) => {
-  console.log("fetching seats from mongodb");
+  const limit = req.query.limit ? parseInt(req.query.limit, 10) : 1;
+  const offset = req.query.offset ? parseInt(req.query.offset, 10) : 0;
+  logger.info("Fetching seats from MongoDB", { limit, offset });
 
-  let collection = (await db).default.collection("seats");
-  const seats = await collection.find()
-    .limit(req.query.limit ? parseInt(req.query.limit) : 1)
-    .skip(req.query.offset ? parseInt(req.query.offset) : 0)
+  const collection = (await db).default.collection("seats");
+  const seats = await collection
+    .find()
+    .limit(limit)
+    .skip(offset)
     .toArray();
 
-  const count = await collection.countDocuments({ });
+  const count = await collection.countDocuments({});
+  logger.debug("MongoDB seats fetch completed", { fetched: seats.length, total: count });
   const responsePayload = {
     content: seats,
     info: {
-      count: count,
+      count
     }
   };
 
-  res.send(responsePayload)
-    .status(200)
+  res.status(200).send(responsePayload);
 });
 
 app.post("/api/db/seats", async (req, res) => {
-  console.log(`saving a new seat to mongodb: ${ JSON.stringify(req.body) }`);
+  const seat = req.body;
+  logger.info("Creating seat in MongoDB", { seat });
 
-  let collection = (await db).default.collection("seats");
-  let seat = req.body;
-
+  const collection = (await db).default.collection("seats");
   await collection.insertOne(seat);
 
-  res.send(seat)
-    .status(201);
+  logger.info("Seat stored in MongoDB", { id: seat?._id ?? null });
+  res.status(201).send(seat);
 });
 
 app.put("/api/db/seats/:id", async (req, res) => {
-  console.log(`updating seat with id ${ req.params.id } in mongodb with update: ${ JSON.stringify(req.body) }`);
+  const { id } = req.params;
+  const seat = req.body;
+  logger.info("Updating seat in MongoDB", { id, seat });
 
-  let collection = (await db).default.collection("seats");
-  let seat = req.body;
+  const collection = (await db).default.collection("seats");
+  await collection.updateOne({ _id: new ObjectId(id) }, seat);
 
-  await collection.updateOne({ _id: new ObjectId(req.params.id) }, seat);
-
-  res.send()
-    .status(204);
+  logger.info("Seat update completed", { id });
+  res.status(204).send();
 });
 
 app.delete("/api/db/seats/:id", async (req, res) => {
-  console.log(`deleting seat with id ${ req.params.id } from mongodb`);
+  const { id } = req.params;
+  logger.info("Deleting seat from MongoDB", { id });
 
-  let collection = (await db).default.collection("seats");
-  await collection.deleteOne({ _id: new ObjectId(req.params.id) });
+  const collection = (await db).default.collection("seats");
+  const result = await collection.deleteOne({ _id: new ObjectId(id) });
+  logger.info("Seat deletion result", { id, deletedCount: result.deletedCount });
 
-  res.send()
-    .status(204);
+  res.status(204).send();
 });
 
 app.get("/api/seats", async (_req, res, next) => {
   try {
     const seats = await readJson(SEATS_FILE, []);
+    logger.debug("Returning seats from filesystem store", { count: seats.length });
     res.json(seats);
   } catch (error) {
     next(error);
@@ -196,15 +221,22 @@ app.post("/api/admin/verify", (req, res) => {
   const headerSecret = extractAdminHeader(req);
   const bodyPassword = typeof req.body?.password === "string" ? req.body.password : "";
   const candidate = headerSecret || bodyPassword;
+  logger.info("Admin verification attempt", {
+    usingHeader: Boolean(headerSecret),
+    usingBody: Boolean(bodyPassword)
+  });
 
   if (!isAdminPasswordConfigured()) {
+    logger.warn("Admin password not configured; granting access");
     res.json({ authorized: true, passwordRequired: false });
     return;
   }
 
   if (candidate && safeCompareString(candidate, ADMIN_PASSWORD)) {
+    logger.info("Admin verification succeeded");
     res.json({ authorized: true, passwordRequired: true });
   } else {
+    logger.warn("Admin verification failed");
     res.status(401).json({ message: "Password is not valid." });
   }
 });
@@ -230,6 +262,7 @@ app.post("/api/seats", requireAdmin, async (req, res, next) => {
         .json({ message: `Seat with ID "${normalizedId}" already exists.` });
     }
 
+    logger.info("Creating seat in filesystem store", { seatId: normalizedId });
     const newSeat = {
       id: normalizedId,
       label: normalizeText(label) || normalizedId,
@@ -246,6 +279,7 @@ app.post("/api/seats", requireAdmin, async (req, res, next) => {
     seats.push(cleanedSeat);
     await writeJson(SEATS_FILE, seats);
 
+    logger.info("Seat created in filesystem store", { seatId: normalizedId });
     res.status(201).json(cleanedSeat);
   } catch (error) {
     next(error);
@@ -258,12 +292,17 @@ app.put("/api/seats/:seatId", requireAdmin, async (req, res, next) => {
     const { label, x, y, zone, notes } = req.body || {};
 
     const seats = await readJson(SEATS_FILE, []);
-    console.log("PUT /api/seats", seatId, "payload", { label, x, y, zone, notes });
-    console.log("Available seat IDs", seats.map((seat) => seat.id));
+    logger.debug("Seat update requested", {
+      seatId,
+      payload: { label, x, y, zone, notes }
+    });
+    logger.debug("Available seat IDs", {
+      seatIds: seats.map((seat) => seat.id)
+    });
     const seatIndex = seats.findIndex((seat) => seat.id === seatId);
 
     if (seatIndex === -1) {
-      console.log("Seat not found for update", seatId);
+      logger.warn("Seat not found for update", { seatId });
       return res.status(404).json({ message: `Seat ${seatId} does not exist.` });
     }
 
@@ -318,6 +357,7 @@ app.put("/api/seats/:seatId", requireAdmin, async (req, res, next) => {
     seats[seatIndex] = seatToUpdate;
     await writeJson(SEATS_FILE, seats);
 
+    logger.info("Seat updated in filesystem store", { seatId });
     res.json(seatToUpdate);
   } catch (error) {
     next(error);
@@ -346,6 +386,7 @@ app.delete("/api/seats/:seatId", requireAdmin, async (req, res, next) => {
     const [removedSeat] = seats.splice(seatIndex, 1);
     await writeJson(SEATS_FILE, seats);
 
+    logger.info("Seat removed from filesystem store", { seatId });
     res.json({ removed: removedSeat });
   } catch (error) {
     next(error);
@@ -356,6 +397,10 @@ app.get("/api/bookings", async (req, res, next) => {
   try {
     const requestedDate = normalizeDate(req.query.date);
     const bookings = await readJson(BOOKINGS_FILE, []);
+
+    logger.debug("Fetching bookings", {
+      filterDate: requestedDate ?? "all"
+    });
 
     if (!requestedDate) {
       res.json(bookings);
@@ -395,6 +440,13 @@ app.post("/api/bookings", async (req, res, next) => {
       readJson(SEATS_FILE, []),
       readJson(BOOKINGS_FILE, [])
     ]);
+
+    logger.info("Booking creation requested", {
+      seatId,
+      date: normalizedDate,
+      skipConflicts: Boolean(skipConflicts),
+      recurrence: recurrenceConfig ?? "single"
+    });
 
     const seatExists = seats.some((seat) => seat.id === seatId);
     if (!seatExists) {
@@ -449,6 +501,12 @@ app.post("/api/bookings", async (req, res, next) => {
     }));
 
     bookings.push(...newBookings);
+    logger.info("Persisting bookings", {
+      seatId,
+      createdCount: newBookings.length,
+      skippedConflicts: plan.conflicts.length,
+      skipConflicts: Boolean(skipConflicts)
+    });
     await writeJson(BOOKINGS_FILE, bookings);
 
     if (skipConflicts) {
@@ -468,6 +526,12 @@ app.post("/api/bookings", async (req, res, next) => {
         requestedCount: plan.targetDates.length,
         preview: buildPreviewResponse(plan, recurrenceConfig)
       });
+      logger.info("Booking creation completed with conflict skips", {
+        seatId,
+        seriesId,
+        createdCount: newBookings.length,
+        skippedCount: plan.conflicts.length
+      });
       return;
     }
 
@@ -485,6 +549,12 @@ app.post("/api/bookings", async (req, res, next) => {
           : { frequency: "single", count: newBookings.length }
       });
     }
+
+    logger.info("Booking creation completed", {
+      seatId,
+      seriesId,
+      createdCount: newBookings.length
+    });
   } catch (error) {
     next(error);
   }
@@ -516,6 +586,12 @@ app.post("/api/bookings/preview", async (req, res, next) => {
       readJson(BOOKINGS_FILE, [])
     ]);
 
+    logger.debug("Booking preview requested", {
+      seatId,
+      date: normalizedDate,
+      recurrence: recurrenceConfig ?? "single"
+    });
+
     const seatExists = seats.some((seat) => seat.id === seatId);
     if (!seatExists) {
       return res.status(404).json({ message: `Seat ${seatId} does not exist.` });
@@ -529,6 +605,10 @@ app.post("/api/bookings/preview", async (req, res, next) => {
     });
 
     res.json(buildPreviewResponse(plan, recurrenceConfig));
+    logger.debug("Booking preview response computed", {
+      seatId,
+      occurrences: plan.targetDates.length
+    });
   } catch (error) {
     next(error);
   }
@@ -540,6 +620,8 @@ app.delete("/api/bookings/:bookingId", async (req, res, next) => {
     if (!bookingId) {
       return res.status(400).json({ message: "bookingId parameter is required." });
     }
+
+    logger.info("Booking deletion requested", { bookingId });
 
     const bookings = await readJson(BOOKINGS_FILE, []);
     const bookingIndex = bookings.findIndex((booking) => booking.id === bookingId);
@@ -559,6 +641,11 @@ app.delete("/api/bookings/:bookingId", async (req, res, next) => {
       source: "single"
     });
 
+    logger.info("Booking deleted", {
+      bookingId,
+      seatId: removedBooking.seatId,
+      date: removedBooking.date
+    });
     res.json({ removed: removedBooking });
   } catch (error) {
     next(error);
@@ -571,6 +658,8 @@ app.delete("/api/bookings/series/:seriesId", async (req, res, next) => {
     if (!seriesId) {
       return res.status(400).json({ message: "seriesId parameter is required." });
     }
+
+    logger.info("Series cancellation requested", { seriesId });
 
     const bookings = await readJson(BOOKINGS_FILE, []);
     const today = new Date().toISOString().slice(0, 10);
@@ -595,6 +684,10 @@ app.delete("/api/bookings/series/:seriesId", async (req, res, next) => {
         }))
       );
     }
+    logger.info("Series cancellation completed", {
+      seriesId,
+      removedCount: removed.length
+    });
     res.json({
       seriesId,
       removed: removed.map((booking) => ({
@@ -628,6 +721,11 @@ app.get("/api/analytics/summary", async (req, res, next) => {
     if (fromDate && toDate && fromDate > toDate) {
       return res.status(400).json({ message: "'from' must not be after 'to'." });
     }
+
+    logger.info("Analytics summary requested", {
+      from: fromDate ?? "auto",
+      to: toDate ?? "auto"
+    });
 
     const [bookings, seats, cancellations] = await Promise.all([
       readJson(BOOKINGS_FILE, []),
@@ -793,6 +891,12 @@ app.get("/api/analytics/summary", async (req, res, next) => {
     };
 
     res.json(summary);
+    logger.info("Analytics summary completed", {
+      from: rangeStart,
+      to: rangeEnd,
+      activeBookings: activeBookings.length,
+      uniqueUsers: uniqueUsers.size
+    });
   } catch (error) {
     next(error);
   }
@@ -813,19 +917,23 @@ app.use(async (req, res, next) => {
   }
 });
 
-app.use((err, _req, res, _next) => {
-  console.error(err);
+app.use((err, req, res, _next) => {
+  logger.error("Unhandled error while processing request", {
+    path: req?.originalUrl,
+    method: req?.method,
+    error: err instanceof Error ? err : new Error(String(err))
+  });
   res.status(500).json({ message: "Unexpected server error." });
 });
 
 ensureDataFiles()
   .then(() => {
     app.listen(PORT, () => {
-      console.log(`Server is running on http://localhost:${PORT}`);
+      logger.info("Server is listening", { port: PORT });
     });
   })
   .catch((error) => {
-    console.error("Failed to start server:", error);
+    logger.error("Failed to start server", error);
     process.exit(1);
   });
 function computeBookingPlan({ seatId, startDate, recurrence, bookings }) {

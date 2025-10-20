@@ -1,4 +1,5 @@
-import {MongoClient} from "mongodb";
+import { MongoClient } from "mongodb";
+import logger from "../logger.js";
 
 const dbEnabled = process.env.MONGODB_ENABLED === "true";
 let db;
@@ -15,7 +16,11 @@ if (dbEnabled) {
 
     const connectionString = `mongodb://${dbUserInfo}${dbUrl}/${dbName}`;
 
-    console.log(`connecting to mongodb on host: '${dbUrl}'`);
+    logger.info("Connecting to MongoDB", {
+        host: dbUrl,
+        database: dbName,
+        user: dbUser ?? "anonymous"
+    });
 
     const client = new MongoClient(connectionString);
     let conn;
@@ -23,12 +28,17 @@ if (dbEnabled) {
     try {
         conn = await client.connect();
     } catch (e) {
-        console.error(e);
+        logger.error("Failed to connect to MongoDB", e);
+        throw e;
     }
+
+    logger.info("MongoDB connection established", {
+        database: dbName
+    });
 
     db = conn.db(dbName);
 } else {
-    console.log("mongodb has not been configured.");
+    logger.warn("MongoDB has not been configured. Database features are disabled.");
 }
 
 export default db;
