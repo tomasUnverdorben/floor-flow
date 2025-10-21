@@ -295,6 +295,7 @@ function MainDashboard() {
   const [isEditorAuthorized, setIsEditorAuthorized] = useState(false);
   const [repeatFrequency, setRepeatFrequency] = useState<RecurrenceFrequency>("none");
   const [repeatCount, setRepeatCount] = useState<number>(1);
+  const [repeatCountInput, setRepeatCountInput] = useState<string>("1");
   const [bookingPreview, setBookingPreview] = useState<BookingPreview | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [isBookingSubmitting, setIsBookingSubmitting] = useState(false);
@@ -586,6 +587,7 @@ function MainDashboard() {
     if (!selectedSeatBooking) {
       setRepeatFrequency("none");
       setRepeatCount(1);
+      setRepeatCountInput("1");
     }
   }, [selectedSeatBooking]);
 
@@ -1453,26 +1455,71 @@ function MainDashboard() {
     setRepeatFrequency(frequency);
     if (frequency === "none") {
       setRepeatCount(1);
+      setRepeatCountInput("1");
       return;
     }
 
     setRepeatCount((current) => {
       const minimumApplied = current < 2 ? 2 : current;
-      return Math.min(minimumApplied, MAX_RECURRENCE_OCCURRENCES);
+      const normalized = Math.min(minimumApplied, MAX_RECURRENCE_OCCURRENCES);
+      setRepeatCountInput(String(normalized));
+      return normalized;
     });
   };
 
   const handleRepeatCountChange = (value: string) => {
+    if (value === "") {
+      setRepeatCountInput("");
+      return;
+    }
+
+    if (!/^\d+$/.test(value)) {
+      return;
+    }
+
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) {
       return;
     }
 
+    const clamped = Math.min(MAX_RECURRENCE_OCCURRENCES, Math.trunc(numeric));
+    const minAllowed = repeatFrequency === "none" ? 1 : 2;
+
+    if (numeric > MAX_RECURRENCE_OCCURRENCES) {
+      setRepeatCountInput(String(clamped));
+      setRepeatCount(clamped);
+      return;
+    }
+
+    setRepeatCountInput(value);
+
+    if (numeric >= minAllowed) {
+      setRepeatCount(clamped);
+    }
+  };
+
+  const handleRepeatCountBlur = () => {
+    const minAllowed = repeatFrequency === "none" ? 1 : 2;
+    if (repeatCountInput === "") {
+      setRepeatCount(minAllowed);
+      setRepeatCountInput(String(minAllowed));
+      return;
+    }
+
+    const numeric = Number(repeatCountInput);
+    if (!Number.isFinite(numeric)) {
+      const fallback = String(minAllowed);
+      setRepeatCount(minAllowed);
+      setRepeatCountInput(fallback);
+      return;
+    }
+
     const normalized = Math.min(
       MAX_RECURRENCE_OCCURRENCES,
-      Math.max(repeatFrequency === "none" ? 1 : 2, Math.trunc(numeric))
+      Math.max(minAllowed, Math.trunc(numeric))
     );
     setRepeatCount(normalized);
+    setRepeatCountInput(String(normalized));
   };
 
   const resolveRecurrenceOptions = useCallback(() => {
@@ -1482,6 +1529,7 @@ function MainDashboard() {
     );
     if (normalizedCount !== repeatCount) {
       setRepeatCount(normalizedCount);
+      setRepeatCountInput(String(normalizedCount));
     }
 
     const recurrencePayload =
@@ -1759,17 +1807,21 @@ function MainDashboard() {
       if (!Number.isFinite(count) || count < 1) {
         return;
       }
-      setRepeatCount(count);
-      if (count === 1) {
+      const normalized = Math.min(MAX_RECURRENCE_OCCURRENCES, Math.max(1, Math.trunc(count)));
+      setRepeatCount(normalized);
+      setRepeatCountInput(String(normalized));
+      if (normalized === 1) {
         setRepeatFrequency("none");
       }
       setConflictContext(null);
       setStatusBanner({
         type: "info",
-        message: `Recurrence length updated to ${count} occurrence${count === 1 ? "" : "s"}.`
+        message: `Recurrence length updated to ${normalized} occurrence${
+          normalized === 1 ? "" : "s"
+        }.`
       });
     },
-    [setConflictContext, setRepeatCount, setRepeatFrequency, setStatusBanner]
+    [setConflictContext, setRepeatCount, setRepeatCountInput, setRepeatFrequency, setStatusBanner]
   );
 
   const handleApplyContiguousSuggestion = useCallback(
@@ -1778,10 +1830,12 @@ function MainDashboard() {
         return;
       }
       setSelectedDate(startDate);
-      setRepeatCount(count);
+      const normalizedCount = Math.min(MAX_RECURRENCE_OCCURRENCES, Math.max(1, Math.trunc(count)));
+      setRepeatCount(normalizedCount);
+      setRepeatCountInput(String(normalizedCount));
       if (frequency === "daily" || frequency === "weekly") {
         setRepeatFrequency(frequency);
-      } else if (count === 1) {
+      } else if (normalizedCount === 1) {
         setRepeatFrequency("none");
       }
       setConflictContext(null);
@@ -1789,10 +1843,17 @@ function MainDashboard() {
         type: "info",
         message: `Using the suggested series starting ${formatDateForDisplay(
           startDate
-        )} with ${count} occurrence${count === 1 ? "" : "s"}.`
+        )} with ${normalizedCount} occurrence${normalizedCount === 1 ? "" : "s"}.`
       });
     },
-    [setConflictContext, setRepeatCount, setRepeatFrequency, setSelectedDate, setStatusBanner]
+    [
+      setConflictContext,
+      setRepeatCount,
+      setRepeatCountInput,
+      setRepeatFrequency,
+      setSelectedDate,
+      setStatusBanner
+    ]
   );
 
   const handleCancelBooking = async () => {
@@ -2394,9 +2455,10 @@ function MainDashboard() {
                               type="number"
                               min={repeatFrequency === "none" ? 1 : 2}
                               max={MAX_RECURRENCE_OCCURRENCES}
-                              value={repeatCount}
+                              value={repeatCountInput}
                               disabled={repeatFrequency === "none"}
                               onChange={(event) => handleRepeatCountChange(event.target.value)}
+                              onBlur={handleRepeatCountBlur}
                             />
                             <span className="field-hint">
                               Includes the selected date. Maximum {MAX_RECURRENCE_OCCURRENCES}.
