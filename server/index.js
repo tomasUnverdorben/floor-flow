@@ -1355,16 +1355,16 @@ function buildPreviewResponse(plan, recurrence) {
 function computeSuggestions(plan, recurrence) {
   const suggestions = {};
   const availableSet = new Set(plan.availableDates);
-  const intervalDays = getIntervalDays(recurrence);
+  const stepper = getRecurrenceStepper(recurrence);
 
   if (plan.targetDates.length > 0) {
-    const shortenDates = collectRun(plan.targetDates, 0, availableSet, intervalDays);
+    const shortenDates = collectRun(plan.targetDates, 0, availableSet, stepper);
     suggestions.shorten = {
       count: shortenDates.length,
       dates: shortenDates
     };
 
-    const contiguous = findLongestRun(plan.targetDates, availableSet, intervalDays);
+    const contiguous = findLongestRun(plan.targetDates, availableSet, stepper);
     if (contiguous) {
       suggestions.contiguousBlock = contiguous;
     }
@@ -1379,14 +1379,7 @@ function computeSuggestions(plan, recurrence) {
   return suggestions;
 }
 
-function getIntervalDays(recurrence) {
-  if (!recurrence) {
-    return null;
-  }
-  return recurrence.frequency === "weekly" ? 7 : 1;
-}
-
-function collectRun(targetDates, startIndex, availableSet, intervalDays) {
+function collectRun(targetDates, startIndex, availableSet, stepper) {
   if (startIndex >= targetDates.length) {
     return [];
   }
@@ -1400,8 +1393,8 @@ function collectRun(targetDates, startIndex, availableSet, intervalDays) {
       break;
     }
 
-    if (dates.length > 0 && intervalDays !== null) {
-      const expected = offsetDate(previous, intervalDays);
+    if (dates.length > 0 && typeof stepper === "function") {
+      const expected = stepper(previous);
       if (expected !== currentDate) {
         break;
       }
@@ -1414,7 +1407,7 @@ function collectRun(targetDates, startIndex, availableSet, intervalDays) {
   return dates;
 }
 
-function findLongestRun(targetDates, availableSet, intervalDays) {
+function findLongestRun(targetDates, availableSet, stepper) {
   let best = { count: 0, dates: [] };
 
   for (let index = 0; index < targetDates.length; index += 1) {
@@ -1423,7 +1416,7 @@ function findLongestRun(targetDates, availableSet, intervalDays) {
       continue;
     }
 
-    const run = collectRun(targetDates, index, availableSet, intervalDays);
+    const run = collectRun(targetDates, index, availableSet, stepper);
     if (run.length > best.count) {
       best = {
         count: run.length,
@@ -1531,8 +1524,9 @@ function normalizeRecurrence(candidate) {
   }
 
   const { frequency, count } = candidate;
-  if (frequency !== "daily" && frequency !== "weekly") {
-    throw new Error('Recurrence frequency must be either "daily" or "weekly".');
+  const allowedFrequencies = new Set(["daily", "weekday", "weekly"]);
+  if (!allowedFrequencies.has(frequency)) {
+    throw new Error('Recurrence frequency must be "daily", "weekday" or "weekly".');
   }
 
   const parsedCount = Number(count);
@@ -1565,6 +1559,10 @@ function generateRecurrenceDates(startDate, recurrence) {
     return [startDate];
   }
 
+  if (recurrence.frequency === "weekday") {
+    return generateWeekdayDates(startDate, recurrence.count);
+  }
+
   const intervalDays = recurrence.frequency === "daily" ? 1 : 7;
   const dates = [];
 
@@ -1583,4 +1581,66 @@ function offsetDate(startDate, offsetDays) {
   }
   reference.setUTCDate(reference.getUTCDate() + offsetDays);
   return reference.toISOString().slice(0, 10);
+}
+
+function generateWeekdayDates(startDate, count) {
+  const dates = [];
+  let current = startDate;
+  let safetyCounter = 0;
+  const MAX_ITERATIONS = count * 7 + 14;
+
+  while (dates.length < count) {
+    if (isWeekend(current)) {
+      current = advanceToNextWeekday(current);
+    } else {
+      dates.push(current);
+      current = advanceToNextWeekday(current);
+    }
+    safetyCounter += 1;
+    if (safetyCounter > MAX_ITERATIONS) {
+      throw new Error("Failed to compute weekday recurrence dates.");
+    }
+  }
+
+  return dates;
+}
+
+function isWeekend(dateString) {
+  const reference = new Date(`${dateString}T00:00:00Z`);
+  if (Number.isNaN(reference.getTime())) {
+    throw new Error(`Invalid date encountered while checking weekend: ${dateString}`);
+  }
+  const day = reference.getUTCDay();
+  return day === 0 || day === 6;
+}
+
+function advanceToNextWeekday(dateString) {
+  let candidate = offsetDate(dateString, 1);
+  for (let guard = 0; guard < 8; guard += 1) {
+    if (!isWeekend(candidate)) {
+      return candidate;
+    }
+    candidate = offsetDate(candidate, 1);
+  }
+  throw new Error("Failed to advance to the next weekday.");
+}
+
+function getRecurrenceStepper(recurrence) {
+  if (!recurrence) {
+    return null;
+  }
+
+  if (recurrence.frequency === "weekly") {
+    return (date) => offsetDate(date, 7);
+  }
+
+  if (recurrence.frequency === "daily") {
+    return (date) => offsetDate(date, 1);
+  }
+
+  if (recurrence.frequency === "weekday") {
+    return (date) => advanceToNextWeekday(date);
+  }
+
+  return null;
 }

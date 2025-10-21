@@ -43,7 +43,7 @@ type FloorplanInfoResponse = {
   updatedAt: string | null;
 };
 
-type RecurrenceFrequency = "none" | "daily" | "weekly";
+type RecurrenceFrequency = "none" | "daily" | "weekday" | "weekly";
 
 type BookingConflict = {
   date: string;
@@ -58,7 +58,7 @@ type BookingPreview = {
   startDate: string;
   requestedCount: number;
   requestedDates: string[];
-  recurrence: { frequency: "single" | "daily" | "weekly"; count: number };
+  recurrence: { frequency: "single" | "daily" | "weekday" | "weekly"; count: number };
   available: string[];
   conflicts: BookingConflict[];
   suggestions: {
@@ -2056,7 +2056,7 @@ function MainDashboard() {
       const normalizedCount = Math.min(MAX_RECURRENCE_OCCURRENCES, Math.max(1, Math.trunc(count)));
       setRepeatCount(normalizedCount);
       setRepeatCountInput(String(normalizedCount));
-      if (frequency === "daily" || frequency === "weekly") {
+      if (frequency === "daily" || frequency === "weekday" || frequency === "weekly") {
         setRepeatFrequency(frequency);
       } else if (normalizedCount === 1) {
         setRepeatFrequency("none");
@@ -2703,6 +2703,7 @@ function MainDashboard() {
                             >
                               <option value="none">Do not repeat</option>
                               <option value="daily">Every day</option>
+                              <option value="weekday">Every weekday (Mon–Fri)</option>
                               <option value="weekly">Every week</option>
                             </select>
                             <span className="field-hint">
