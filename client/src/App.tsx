@@ -8,6 +8,7 @@ type Seat = {
   label: string;
   x: number;
   y: number;
+  floor: number;
   zone?: string;
   notes?: string;
 };
@@ -26,6 +27,7 @@ type SeatDraft = {
   label: string;
   x: number;
   y: number;
+  floor: number;
   zone?: string;
   notes?: string;
 };
@@ -38,9 +40,26 @@ type StatusBanner =
   | null;
 
 type FloorplanInfoResponse = {
+  floor: number;
   hasCustomImage: boolean;
   imageUrl: string;
   updatedAt: string | null;
+  mimeType?: string | null;
+  originalName?: string | null;
+  size?: number | null;
+};
+
+type BuildingFloor = {
+  index: number;
+  name: string;
+  hasFloorplan: boolean;
+  updatedAt: string | null;
+  imageUrl: string;
+};
+
+type BuildingInfo = {
+  floorCount: number;
+  floors: BuildingFloor[];
 };
 
 type RecurrenceFrequency = "none" | "daily" | "weekday" | "weekly";
@@ -309,8 +328,10 @@ function MainDashboard() {
   const [floorplanSize, setFloorplanSize] = useState<{ width: number; height: number } | null>(
     null
   );
-  const [floorplanImageUrl, setFloorplanImageUrl] = useState(resolveApiPath("/floorplan.png"));
-  const [hasCustomFloorplan, setHasCustomFloorplan] = useState(false);
+  const [buildingInfo, setBuildingInfo] = useState<BuildingInfo | null>(null);
+  const [selectedFloor, setSelectedFloor] = useState<number>(1);
+  const [floorplans, setFloorplans] = useState<Record<number, FloorplanInfoResponse>>({});
+  const [floorCountInput, setFloorCountInput] = useState<string>("1");
   const [isFloorplanUploading, setIsFloorplanUploading] = useState(false);
   const [isFloorplanDeleting, setIsFloorplanDeleting] = useState(false);
   const [adminSecret, setAdminSecret] = useState<string | null>(null);
@@ -339,6 +360,26 @@ function MainDashboard() {
     seatsRef.current = seats;
   }, [seats]);
 
+  const currentFloorplanInfo = floorplans[selectedFloor];
+  const floorplanImageUrl = resolveApiPath(
+    currentFloorplanInfo?.imageUrl ?? `/api/floorplans/${selectedFloor}/image`
+  );
+  const hasCustomFloorplan = Boolean(currentFloorplanInfo?.hasCustomImage);
+  const availableFloors = buildingInfo?.floors ?? [
+    {
+      index: 1,
+      name: "Floor 1",
+      hasFloorplan: hasCustomFloorplan,
+      updatedAt: currentFloorplanInfo?.updatedAt ?? null,
+      imageUrl: floorplanImageUrl
+    }
+  ];
+  const currentFloorName =
+    availableFloors.find((floor) => floor.index === selectedFloor)?.name ??
+    `Floor ${selectedFloor}`;
+  const getFloorName = (index: number) =>
+    availableFloors.find((floor) => floor.index === index)?.name ?? `Floor ${index}`;
+
   const updateSeatOnServer = useCallback(
     async (seatId: string, updates: Partial<SeatDraft>) => {
       const payload: Record<string, unknown> = { ...updates };
@@ -347,6 +388,9 @@ function MainDashboard() {
       }
       if (typeof updates.y === "number") {
         payload.y = normalizeCoordinate(updates.y);
+      }
+      if (typeof updates.floor === "number") {
+        payload.floor = Math.max(1, Math.trunc(updates.floor));
       }
 
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -370,11 +414,21 @@ function MainDashboard() {
         );
       }
 
+      const existingSeat = seatsRef.current.find((item) => item.id === seatId);
       const updatedSeat: Seat = await response.json();
       const normalizedSeat: Seat = {
         ...updatedSeat,
         x: normalizeCoordinate(updatedSeat.x),
-        y: normalizeCoordinate(updatedSeat.y)
+        y: normalizeCoordinate(updatedSeat.y),
+        floor: Math.max(
+          1,
+          Math.trunc(
+            updatedSeat.floor ??
+              (typeof updates.floor === "number" ? updates.floor : undefined) ??
+              existingSeat?.floor ??
+              1
+          )
+        )
       };
       setSeats((existing) =>
         existing.map((seat) => (seat.id === normalizedSeat.id ? normalizedSeat : seat))
@@ -388,6 +442,7 @@ function MainDashboard() {
           label: normalizedSeat.label,
           x: normalizedSeat.x,
           y: normalizedSeat.y,
+          floor: normalizedSeat.floor,
           zone: normalizedSeat.zone ?? "",
           notes: normalizedSeat.notes ?? ""
         };
@@ -402,7 +457,8 @@ function MainDashboard() {
       const payload: SeatDraft = {
         ...seat,
         x: normalizeCoordinate(seat.x),
-        y: normalizeCoordinate(seat.y)
+        y: normalizeCoordinate(seat.y),
+        floor: Math.max(1, Math.trunc(seat.floor ?? 1))
       };
 
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -430,7 +486,8 @@ function MainDashboard() {
       const normalizedSeat: Seat = {
         ...createdSeat,
         x: normalizeCoordinate(createdSeat.x),
-        y: normalizeCoordinate(createdSeat.y)
+        y: normalizeCoordinate(createdSeat.y),
+        floor: Math.max(1, Math.trunc(createdSeat.floor ?? payload.floor ?? 1))
       };
       setSeats((existing) => [...existing, normalizedSeat]);
       return normalizedSeat;
@@ -503,15 +560,20 @@ function MainDashboard() {
     []
   );
 
-  const fetchFloorplanInfo = useCallback(async () => {
+  const fetchFloorplanInfo = useCallback(async (floor: number) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/floorplan`);
+      const response = await fetch(`${API_BASE_URL}/api/floorplans/${floor}`);
       if (!response.ok) {
         throw new Error(`Failed to load floor plan (status ${response.status})`);
       }
       const payload: FloorplanInfoResponse = await response.json();
-      setFloorplanImageUrl(resolveApiPath(payload.imageUrl));
-      setHasCustomFloorplan(Boolean(payload.hasCustomImage));
+      setFloorplans((current) => ({
+        ...current,
+        [floor]: {
+          ...payload,
+          imageUrl: resolveApiPath(payload.imageUrl)
+        }
+      }));
     } catch (error) {
       console.error(error);
       setStatusBanner({
@@ -519,7 +581,41 @@ function MainDashboard() {
         message: "Failed to load the floor plan image. Please refresh the page."
       });
     }
-  }, []);
+  }, [setStatusBanner]);
+
+  const fetchBuildingInfo = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/building`);
+      if (!response.ok) {
+        throw new Error(`Failed to load building configuration (status ${response.status})`);
+      }
+      const payload = (await response.json()) as BuildingInfo;
+      setBuildingInfo(payload);
+      setFloorCountInput(String(payload.floorCount));
+      const nextFloorplans: Record<number, FloorplanInfoResponse> = {};
+      payload.floors.forEach((floor) => {
+        nextFloorplans[floor.index] = {
+          floor: floor.index,
+          hasCustomImage: floor.hasFloorplan,
+          imageUrl: resolveApiPath(floor.imageUrl),
+          updatedAt: floor.updatedAt
+        };
+      });
+      setFloorplans(nextFloorplans);
+      setSelectedFloor((current) => {
+        if (payload.floors.some((floor) => floor.index === current)) {
+          return current;
+        }
+        return payload.floors[0]?.index ?? 1;
+      });
+    } catch (error) {
+      console.error(error);
+      setStatusBanner({
+        type: "error",
+        message: "Failed to load building details. Please refresh the page."
+      });
+    }
+  }, [setStatusBanner]);
 
   const fetchSeats = useCallback(async () => {
     setIsLoadingSeats(true);
@@ -532,7 +628,8 @@ function MainDashboard() {
       const normalizedSeats = seatPayload.map((seat) => ({
         ...seat,
         x: normalizeCoordinate(seat.x),
-        y: normalizeCoordinate(seat.y)
+        y: normalizeCoordinate(seat.y),
+        floor: Math.max(1, Math.trunc(seat.floor ?? 1))
       }));
       setSeats(normalizedSeats);
     } catch (error) {
@@ -575,8 +672,29 @@ function MainDashboard() {
   }, [fetchAllBookings]);
 
   useEffect(() => {
-    fetchFloorplanInfo();
-  }, [fetchFloorplanInfo]);
+    fetchBuildingInfo();
+  }, [fetchBuildingInfo]);
+
+  useEffect(() => {
+    if (buildingInfo && !floorplans[selectedFloor]) {
+      fetchFloorplanInfo(selectedFloor);
+    }
+  }, [buildingInfo, selectedFloor, floorplans, fetchFloorplanInfo]);
+
+  useEffect(() => {
+    if (!selectedSeatId) {
+      return;
+    }
+    const seat = seats.find((entry) => entry.id === selectedSeatId);
+    if (!seat || seat.floor !== selectedFloor) {
+      setSelectedSeatId(null);
+      setSeatEditorDraft(null);
+    }
+  }, [selectedFloor, seats, selectedSeatId]);
+
+  useEffect(() => {
+    setDraftSeat((current) => (current ? { ...current, floor: selectedFloor } : current));
+  }, [selectedFloor]);
 
   useEffect(() => {
     setFloorplanSize(null);
@@ -621,9 +739,17 @@ function MainDashboard() {
     setNameInput(booking ? booking.userName : "");
   }, [bookings, selectedSeatId]);
 
+  const seatsOnFloor = useMemo(
+    () => seats.filter((seat) => seat.floor === selectedFloor),
+    [seats, selectedFloor]
+  );
+
   const selectedSeat = useMemo(
-    () => (selectedSeatId ? seats.find((seat) => seat.id === selectedSeatId) ?? null : null),
-    [seats, selectedSeatId]
+    () =>
+      selectedSeatId
+        ? seats.find((seat) => seat.id === selectedSeatId && seat.floor === selectedFloor) ?? null
+        : null,
+    [seats, selectedSeatId, selectedFloor]
   );
 
   const selectedSeatBooking = useMemo(
@@ -669,6 +795,7 @@ function MainDashboard() {
               label: selectedSeat.label,
               x: normalizeCoordinate(selectedSeat.x),
               y: normalizeCoordinate(selectedSeat.y),
+              floor: Math.max(1, Math.trunc(selectedSeat.floor)),
               zone: selectedSeat.zone ?? "",
               notes: selectedSeat.notes ?? ""
             }
@@ -693,17 +820,22 @@ function MainDashboard() {
         return current;
       }
 
+      const normalizedX = normalizeCoordinate(latestSeat.x);
+      const normalizedY = normalizeCoordinate(latestSeat.y);
+      const normalizedFloor = Math.max(1, Math.trunc(latestSeat.floor));
       if (
-        Math.abs(current.x - latestSeat.x) < 0.0001 &&
-        Math.abs(current.y - latestSeat.y) < 0.0001
+        Math.abs(current.x - normalizedX) < 0.0001 &&
+        Math.abs(current.y - normalizedY) < 0.0001 &&
+        current.floor === normalizedFloor
       ) {
         return current;
       }
 
       return {
         ...current,
-        x: normalizeCoordinate(latestSeat.x),
-        y: normalizeCoordinate(latestSeat.y)
+        x: normalizedX,
+        y: normalizedY,
+        floor: normalizedFloor
       };
     });
   }, [isEditorMode, seats, selectedSeatId]);
@@ -854,14 +986,18 @@ function MainDashboard() {
 
   const getAvailableSeatsForBooking = useCallback(
     (booking: Booking) => {
+      const seatForBooking = seats.find((seat) => seat.id === booking.seatId);
+      const targetFloor = seatForBooking?.floor ?? selectedFloor;
       const occupiedSeats = new Set(
         allBookings
           .filter((entry) => entry.date === booking.date && entry.id !== booking.id)
           .map((entry) => entry.seatId)
       );
-      return seats.filter((seat) => !occupiedSeats.has(seat.id));
+      return seats.filter(
+        (seat) => seat.floor === targetFloor && !occupiedSeats.has(seat.id)
+      );
     },
-    [allBookings, seats]
+    [allBookings, seats, selectedFloor]
   );
 
   const handleMoveTargetChange = useCallback((bookingId: string, seatId: string) => {
@@ -1168,6 +1304,100 @@ function MainDashboard() {
     floorplanFileInputRef.current?.click();
   };
 
+  const handleFloorSelect = (event: ChangeEvent<HTMLSelectElement>) => {
+    const parsed = Number(event.target.value);
+    if (Number.isFinite(parsed)) {
+      setSelectedFloor(Math.max(1, Math.trunc(parsed)));
+    }
+  };
+
+  const handleApplyFloorCount = async () => {
+    const parsed = Number(floorCountInput);
+    if (!Number.isFinite(parsed)) {
+      setStatusBanner({
+        type: "error",
+        message: "Floor count must be a valid number."
+      });
+      return;
+    }
+
+    const normalized = Math.max(1, Math.min(20, Math.trunc(parsed)));
+    if (normalized !== parsed) {
+      setFloorCountInput(String(normalized));
+    }
+
+    if (buildingInfo && normalized === buildingInfo.floorCount) {
+      setStatusBanner({ type: "info", message: "Floor count is already up to date." });
+      return;
+    }
+
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (adminSecret) {
+        headers["x-admin-secret"] = adminSecret;
+      }
+
+      const body = {
+        floorCount: normalized,
+        floors: buildingInfo?.floors.map((floor) => ({ index: floor.index, name: floor.name }))
+      };
+
+      const response = await fetch(`${API_BASE_URL}/api/building`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body)
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          handleAdminUnauthorized();
+          return;
+        }
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(
+          typeof payload?.message === "string"
+            ? payload.message
+            : `Failed to update floors (status ${response.status}).`
+        );
+      }
+
+      const payload = (await response.json()) as BuildingInfo;
+      setBuildingInfo(payload);
+      setFloorCountInput(String(payload.floorCount));
+      const nextFloorplans: Record<number, FloorplanInfoResponse> = {};
+      payload.floors.forEach((floor) => {
+        nextFloorplans[floor.index] = {
+          floor: floor.index,
+          hasCustomImage: floor.hasFloorplan,
+          imageUrl: resolveApiPath(floor.imageUrl),
+          updatedAt: floor.updatedAt
+        };
+      });
+      setFloorplans(nextFloorplans);
+      setSelectedFloor((current) => {
+        if (payload.floors.some((floor) => floor.index === current)) {
+          return current;
+        }
+        return payload.floors[0]?.index ?? 1;
+      });
+      await fetchSeats();
+      setStatusBanner({
+        type: "success",
+        message: `Floor count updated to ${payload.floorCount}.`
+      });
+    } catch (error) {
+      console.error(error);
+      if (error instanceof Error && error.message === ADMIN_UNAUTHORIZED_ERROR) {
+        handleAdminUnauthorized();
+        return;
+      }
+      setStatusBanner({
+        type: "error",
+        message: error instanceof Error ? error.message : "Failed to update floors."
+      });
+    }
+  };
+
   const handleFloorplanFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
     event.target.value = "";
@@ -1212,7 +1442,7 @@ function MainDashboard() {
         headers["x-admin-secret"] = adminSecret;
       }
 
-      const response = await fetch(`${API_BASE_URL}/api/floorplan`, {
+      const response = await fetch(`${API_BASE_URL}/api/floorplans/${selectedFloor}`, {
         method: "PUT",
         headers,
         body: JSON.stringify({
@@ -1235,8 +1465,31 @@ function MainDashboard() {
       }
 
       const payload: FloorplanInfoResponse = await response.json();
-      setFloorplanImageUrl(resolveApiPath(payload.imageUrl));
-      setHasCustomFloorplan(Boolean(payload.hasCustomImage));
+      const resolved: FloorplanInfoResponse = {
+        ...payload,
+        imageUrl: resolveApiPath(payload.imageUrl)
+      };
+      setFloorplans((current) => ({
+        ...current,
+        [selectedFloor]: resolved
+      }));
+      setBuildingInfo((current) =>
+        current
+          ? {
+              ...current,
+              floors: current.floors.map((floor) =>
+                floor.index === selectedFloor
+                  ? {
+                      ...floor,
+                      hasFloorplan: resolved.hasCustomImage,
+                      updatedAt: resolved.updatedAt,
+                      imageUrl: resolved.imageUrl
+                    }
+                  : floor
+              )
+            }
+          : current
+      );
       handleResetView();
       setStatusBanner({
         type: "success",
@@ -1265,7 +1518,7 @@ function MainDashboard() {
         headers["x-admin-secret"] = adminSecret;
       }
 
-      const response = await fetch(`${API_BASE_URL}/api/floorplan`, {
+      const response = await fetch(`${API_BASE_URL}/api/floorplans/${selectedFloor}`, {
         method: "DELETE",
         headers
       });
@@ -1284,8 +1537,31 @@ function MainDashboard() {
       }
 
       const payload: FloorplanInfoResponse = await response.json();
-      setFloorplanImageUrl(resolveApiPath(payload.imageUrl));
-      setHasCustomFloorplan(Boolean(payload.hasCustomImage));
+      const resolved: FloorplanInfoResponse = {
+        ...payload,
+        imageUrl: resolveApiPath(payload.imageUrl)
+      };
+      setFloorplans((current) => ({
+        ...current,
+        [selectedFloor]: resolved
+      }));
+      setBuildingInfo((current) =>
+        current
+          ? {
+              ...current,
+              floors: current.floors.map((floor) =>
+                floor.index === selectedFloor
+                  ? {
+                      ...floor,
+                      hasFloorplan: resolved.hasCustomImage,
+                      updatedAt: resolved.updatedAt,
+                      imageUrl: resolved.imageUrl
+                    }
+                  : floor
+              )
+            }
+          : current
+      );
       handleResetView();
       setStatusBanner({
         type: "success",
@@ -1443,6 +1719,7 @@ function MainDashboard() {
       label: "",
       x: 50,
       y: 50,
+      floor: selectedFloor,
       zone: "",
       notes: ""
     });
@@ -1465,6 +1742,15 @@ function MainDashboard() {
           return current;
         }
         return { ...current, [field]: normalizeCoordinate(numeric) };
+      }
+      if (field === "floor") {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          return current;
+        }
+        const normalized = Math.max(1, Math.trunc(numeric));
+        setSelectedFloor(normalized);
+        return { ...current, floor: normalized };
       }
       return { ...current, [field]: value };
     });
@@ -1503,17 +1789,20 @@ function MainDashboard() {
         label: trimmedLabel || trimmedId,
         x: normalizeCoordinate(draftSeat.x),
         y: normalizeCoordinate(draftSeat.y),
+        floor: draftSeat.floor,
         zone: trimmedZone,
         notes: trimmedNotes
       });
 
       setDraftSeat(null);
+      setSelectedFloor(created.floor);
       setSelectedSeatId(created.id);
       setSeatEditorDraft({
         id: created.id,
         label: created.label,
         x: created.x,
         y: created.y,
+        floor: created.floor,
         zone: created.zone ?? "",
         notes: created.notes ?? ""
       });
@@ -1554,6 +1843,16 @@ function MainDashboard() {
         return { ...current, [field]: normalizeCoordinate(numeric) };
       }
 
+      if (field === "floor") {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          return current;
+        }
+        const normalized = Math.max(1, Math.trunc(numeric));
+        setSelectedFloor(normalized);
+        return { ...current, floor: normalized };
+      }
+
       return { ...current, [field]: value };
     });
   };
@@ -1581,6 +1880,7 @@ function MainDashboard() {
         label: trimmedLabel,
         x: seatEditorDraft.x,
         y: seatEditorDraft.y,
+        floor: seatEditorDraft.floor,
         zone: trimmedZone,
         notes: trimmedNotes
       });
@@ -1591,6 +1891,7 @@ function MainDashboard() {
               label: trimmedLabel,
               x: normalizeCoordinate(seatEditorDraft.x),
               y: normalizeCoordinate(seatEditorDraft.y),
+              floor: Math.max(1, Math.trunc(seatEditorDraft.floor)),
               zone: trimmedZone,
               notes: trimmedNotes
             }
@@ -2293,7 +2594,28 @@ function MainDashboard() {
                   Reset view
                 </button>
                 <label className="tuning-control">
-                  <span>Floor plan image</span>
+                  <span>Total floors</span>
+                  <div className="floor-count-controls">
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={floorCountInput}
+                      onChange={(event) => setFloorCountInput(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="toolbar-button subtle"
+                      onClick={handleApplyFloorCount}
+                      disabled={isFloorplanUploading || isFloorplanDeleting}
+                    >
+                      Update count
+                    </button>
+                  </div>
+                  <span className="floorplan-hint">Allowed range: 1–20 floors.</span>
+                </label>
+                <label className="tuning-control">
+                  <span>Floor plan image ({currentFloorName})</span>
                   <div className="floorplan-actions">
                     <button
                       type="button"
@@ -2320,7 +2642,9 @@ function MainDashboard() {
                   </div>
                   <span className="floorplan-hint">
                     Accepted: PNG, JPG or WEBP · max 5 MB ·{" "}
-                    {hasCustomFloorplan ? "custom image in use" : "default image in use"}
+                    {hasCustomFloorplan
+                      ? `custom image in use for ${currentFloorName}`
+                      : `using default image for ${currentFloorName}`}
                   </span>
                 </label>
               </div>
@@ -2337,6 +2661,18 @@ function MainDashboard() {
 
       <main className="app-layout">
         <section className="map-panel">
+          <div className="floor-switcher">
+            <label htmlFor="floor-select">
+              <span>Floor</span>
+              <select id="floor-select" value={selectedFloor} onChange={handleFloorSelect}>
+                {availableFloors.map((floor) => (
+                  <option key={floor.index} value={floor.index}>
+                    {floor.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <div className="floorplan-container">
             <div
               className={`floorplan-canvas${isEditorMode ? " floorplan-editing" : ""}`}
@@ -2377,8 +2713,8 @@ function MainDashboard() {
                     }
                   }}
                 />
-                {!isLoadingSeats && seats.length > 0
-                  ? seats.map((seat) => {
+                {!isLoadingSeats && seatsOnFloor.length > 0
+                  ? seatsOnFloor.map((seat) => {
                       const isBooked = isSeatBooked(seat.id);
                       const isSelected = seat.id === selectedSeatId;
                       const seatStyle: SeatStyle = {
@@ -2416,7 +2752,7 @@ function MainDashboard() {
                       );
                     })
                   : null}
-                {draftSeat ? (
+                {draftSeat && draftSeat.floor === selectedFloor ? (
                   <div
                     className="seat-button seat-draft"
                     style={{
@@ -2544,6 +2880,19 @@ function MainDashboard() {
                             onChange={(event) => handleDraftSeatChange("y", event.target.value)}
                           />
                         </label>
+                        <label>
+                          Floor
+                          <select
+                            value={draftSeat.floor}
+                            onChange={(event) => handleDraftSeatChange("floor", event.target.value)}
+                          >
+                            {availableFloors.map((floor) => (
+                              <option key={floor.index} value={floor.index}>
+                                {floor.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                       </div>
                       <div className="editor-actions">
                         <button type="submit" className="primary">
@@ -2617,6 +2966,19 @@ function MainDashboard() {
                             onChange={(event) => handleSeatEditorChange("y", event.target.value)}
                           />
                         </label>
+                        <label>
+                          Floor
+                          <select
+                            value={seatEditorDraft.floor}
+                            onChange={(event) => handleSeatEditorChange("floor", event.target.value)}
+                          >
+                            {availableFloors.map((floor) => (
+                              <option key={floor.index} value={floor.index}>
+                                {floor.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                       </div>
                       <div className="editor-actions">
                         <button type="submit" className="primary">
@@ -2637,13 +2999,16 @@ function MainDashboard() {
             ) : (
               <>
                 <p className="selected-date">{formatDateForDisplay(selectedDate)}</p>
-                {selectedSeat ? (
-                  <>
-                    {selectedSeat.zone ? (
-                      <p className="muted">
-                        Zone: <strong>{selectedSeat.zone}</strong>
-                      </p>
-                    ) : null}
+                    {selectedSeat ? (
+                      <>
+                        <p className="muted">
+                          Floor: <strong>{getFloorName(selectedSeat.floor)}</strong>
+                        </p>
+                        {selectedSeat.zone ? (
+                          <p className="muted">
+                            Zone: <strong>{selectedSeat.zone}</strong>
+                          </p>
+                        ) : null}
                     {selectedSeat.notes ? (
                       <p className="muted">{selectedSeat.notes}</p>
                     ) : null}

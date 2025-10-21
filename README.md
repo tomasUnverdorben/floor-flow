@@ -74,20 +74,22 @@ npm start
 | `server/data/bookings.json` | Active bookings (auto-created) |
 | `server/data/cancellations.json` | Cancellation log used for analytics |
 | `client/src/App.tsx` | React app with interactive map & sidebar |
-| `client/public/floorplan.png` | Default floor plan image |
+| `client/public/floorplan.png` | Default image for floor 1 (used until replaced per floor) |
 
 ---
 
 ## 🗺️ Editing the Floor Plan & Seats
 
-1. Replace `client/public/floorplan.png` with your real layout (~1600×900 recommended).
+1. Replace `client/public/floorplan.png` with your real layout (~1600×900 recommended) for the ground floor.
 2. Start the app and toggle **Edit mode** in the top-right corner.
-3. You can:
+3. Use the floor selector to pick the level you want to edit. In the toolbar you can:
+   - set the total number of floors,
+   - upload or remove a floor plan image for the active floor,
    - drag and reposition seats,
    - add or remove seats,
-   - update labels, zones, and notes,
+   - update labels, zones, notes, and the seat’s floor,
    - fine-tune zoom and marker size.
-4. Changes save automatically to `server/data/seats.json`.
+4. Changes save automatically to `server/data/seats.json` (seat coordinates/floor) and the floor-plan storage (filesystem or MongoDB).
 
 Alternatively, edit the JSON directly:
 ```json
@@ -96,6 +98,7 @@ Alternatively, edit the JSON directly:
   "label": "35-4",
   "x": 47.2,
   "y": 63.5,
+  "floor": 1,
   "zone": "North",
   "notes": "Near window"
 }
@@ -103,10 +106,23 @@ Alternatively, edit the JSON directly:
 
 ---
 
+## 🛗 Multi-floor Buildings
+
+- Floor plans, seat coordinates, and bookings are now floor-aware. Use the selector above the map to jump between levels.
+- In edit mode you can change the total number of floors and upload a dedicated image for each one. Images are stored on the persistent volume by default or inside MongoDB when `MONGODB_ENABLED=true`.
+- Seat forms let you assign or move desks between floors. Reducing the floor count automatically clamps existing seats and removes unused floor-plan images.
+
+---
+
 ## 📡 API Overview
 
 | Method | Endpoint | Description |
 |--------|-----------|-------------|
+| GET | `/api/building` | Building configuration (floor count, names, map status) |
+| PUT | `/api/building` | Update total floors / names *(admin)* |
+| GET | `/api/floorplans/:floor` | Floor-plan metadata for a floor |
+| PUT | `/api/floorplans/:floor` | Upload or replace the floor-plan image *(admin)* |
+| DELETE | `/api/floorplans/:floor` | Remove the floor-plan image *(admin)* |
 | GET | `/api/seats` | Get all seats |
 | POST | `/api/seats` | Create new seat |
 | PUT | `/api/seats/:seatId` | Update existing seat |

@@ -721,10 +721,44 @@
   flex-wrap: wrap;
 }
 
+.floor-count-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.floor-count-controls input {
+  width: 80px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #d0d5dd;
+}
+
 .floorplan-hint {
   font-size: 0.75rem;
   color: #475467;
   font-weight: 500;
+}
+
+.floor-switcher {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.floor-switcher label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #344054;
+}
+
+.floor-switcher select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #d0d5dd;
+  background: #fff;
 }
 
 .booking-card {
