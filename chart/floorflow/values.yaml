@@ -47,6 +47,9 @@ mongodb:
     retryIntervalSeconds: 3
 
 persistence:
+  # When MongoDB is disabled, keep this enabled to store floor plan uploads on a PVC.
+  # If MongoDB is enabled the application will store floor plans in the database and
+  # you can optionally disable the volume.
   enabled: true
   accessModes:
     - ReadWriteOnce

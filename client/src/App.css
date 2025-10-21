@@ -714,6 +714,19 @@
   text-align: right;
 }
 
+.floorplan-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.floorplan-hint {
+  font-size: 0.75rem;
+  color: #475467;
+  font-weight: 500;
+}
+
 .booking-card {
   display: flex;
   flex-direction: column;

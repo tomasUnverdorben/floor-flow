@@ -16,13 +16,25 @@ const SEATS_FILE = path.join(DATA_DIR, "seats.json");
 const BOOKINGS_FILE = path.join(DATA_DIR, "bookings.json");
 const CANCELLATIONS_FILE = path.join(DATA_DIR, "cancellations.json");
 const CLIENT_BUILD_DIR = path.join(__dirname, "..", "client", "dist");
+const DEFAULT_FLOORPLAN_IMAGE = path.join(__dirname, "..", "client", "public", "floorplan.png");
+const FLOORPLAN_META_FILE = path.join(DATA_DIR, "floorplan.json");
+const FLOORPLAN_IMAGE_PREFIX = "floorplan-image";
+const ACCEPTED_FLOORPLAN_TYPES = new Map([
+  ["image/png", "png"],
+  ["image/jpeg", "jpg"],
+  ["image/webp", "webp"]
+]);
+const MAX_FLOORPLAN_FILE_SIZE = 5 * 1024 * 1024;
+const MONGODB_ENABLED = process.env.MONGODB_ENABLED === "true";
+const FLOORPLAN_COLLECTION = "floorplanAssets";
+const FLOORPLAN_DOCUMENT_ID = "floorplan";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ? String(process.env.ADMIN_PASSWORD) : "";
 const MAX_RECURRENCE_OCCURRENCES = 52;
 const PREVIEW_LOOKAHEAD_DAYS = 365;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 
 app.use((req, res, next) => {
   const start = Date.now();
@@ -90,6 +102,251 @@ async function readJson(file, fallback) {
 async function writeJson(file, value) {
   await fs.writeFile(file, JSON.stringify(value, null, 2), "utf8");
   logger.debug("Wrote JSON file", { file });
+}
+
+async function readFloorplanMeta() {
+  if (MONGODB_ENABLED) {
+    const database = (await db).default;
+    if (!database) {
+      throw new Error("MongoDB connection is not available.");
+    }
+    const document = await database
+      .collection(FLOORPLAN_COLLECTION)
+      .findOne({ _id: FLOORPLAN_DOCUMENT_ID }, { projection: { data: 0 } });
+    if (!document) {
+      return null;
+    }
+    return {
+      storage: "mongo",
+      mimeType: document.mimeType ?? null,
+      updatedAt: document.updatedAt ?? null,
+      originalName: document.originalName ?? null,
+      size: document.size ?? null
+    };
+  }
+
+  try {
+    const raw = await fs.readFile(FLOORPLAN_META_FILE, "utf8");
+    const meta = JSON.parse(raw);
+    if (meta && typeof meta === "object") {
+      return {
+        storage: "file",
+        filename: meta.filename ?? null,
+        mimeType: meta.mimeType ?? null,
+        updatedAt: meta.updatedAt ?? null,
+        originalName: meta.originalName ?? null,
+        size: meta.size ?? null
+      };
+    }
+    return null;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+    logger.error("Failed to read floorplan metadata", error);
+    throw error;
+  }
+}
+
+async function writeFloorplanMeta(meta) {
+  await writeJson(FLOORPLAN_META_FILE, {
+    storage: "file",
+    ...meta
+  });
+}
+
+async function removeFloorplanMeta() {
+  try {
+    await fs.unlink(FLOORPLAN_META_FILE);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      logger.error("Failed to remove floorplan metadata", error);
+      throw error;
+    }
+  }
+}
+
+function getFloorplanPath(filename) {
+  return path.join(DATA_DIR, filename);
+}
+
+async function getFloorplanState() {
+  if (MONGODB_ENABLED) {
+    const meta = await readFloorplanMeta();
+    if (meta) {
+      return {
+        storage: "mongo",
+        hasCustomImage: true,
+        filename: null,
+        mimeType: meta.mimeType,
+        updatedAt: meta.updatedAt ?? null
+      };
+    }
+    return {
+      storage: "mongo",
+      hasCustomImage: false,
+      filename: null,
+      mimeType: null,
+      updatedAt: null
+    };
+  }
+
+  const meta = await readFloorplanMeta();
+  if (meta?.filename) {
+    const candidatePath = getFloorplanPath(meta.filename);
+    try {
+      await fs.access(candidatePath);
+      return {
+        storage: "file",
+        hasCustomImage: true,
+        filename: meta.filename,
+        mimeType: meta.mimeType,
+        updatedAt: meta.updatedAt ?? null
+      };
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        logger.error("Failed to access stored floorplan image", error);
+        throw error;
+      }
+      logger.warn("Floorplan metadata found but file is missing; falling back to default");
+    }
+  }
+
+  return {
+    storage: "file",
+    hasCustomImage: false,
+    filename: null,
+    mimeType: null,
+    updatedAt: null
+  };
+}
+
+function parseFloorplanDataUrl(dataUrl) {
+  if (typeof dataUrl !== "string" || dataUrl.trim().length === 0) {
+    throw new Error("Image payload must be provided as a base64 data URL string.");
+  }
+
+  const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) {
+    throw new Error("Image payload must be a valid base64 data URL.");
+  }
+
+  const mimeType = match[1].toLowerCase();
+  const extension = ACCEPTED_FLOORPLAN_TYPES.get(mimeType);
+  if (!extension) {
+    throw new Error("Only PNG, JPEG or WEBP images are supported.");
+  }
+
+  const buffer = Buffer.from(match[2], "base64");
+  if (!buffer.length) {
+    throw new Error("Uploaded image payload is empty.");
+  }
+  if (buffer.length > MAX_FLOORPLAN_FILE_SIZE) {
+    throw new Error("Uploaded image is too large. Maximum allowed size is 5 MB.");
+  }
+
+  return { mimeType, extension, buffer };
+}
+
+async function saveFloorplanImage({ dataUrl, originalName }) {
+  const { mimeType, extension, buffer } = parseFloorplanDataUrl(dataUrl);
+  const updatedAt = new Date().toISOString();
+  const normalizedName = normalizeText(originalName) ?? null;
+
+  if (MONGODB_ENABLED) {
+    const database = (await db).default;
+    if (!database) {
+      throw new Error("MongoDB connection is not available.");
+    }
+    await database.collection(FLOORPLAN_COLLECTION).updateOne(
+      { _id: FLOORPLAN_DOCUMENT_ID },
+      {
+        $set: {
+          mimeType,
+          updatedAt,
+          originalName: normalizedName,
+          size: buffer.length,
+          data: buffer.toString("base64")
+        }
+      },
+      { upsert: true }
+    );
+    logger.info("Floorplan image stored in MongoDB", {
+      mimeType,
+      size: buffer.length
+    });
+    return {
+      storage: "mongo",
+      mimeType,
+      updatedAt,
+      originalName: normalizedName,
+      size: buffer.length
+    };
+  }
+
+  const filename = `${FLOORPLAN_IMAGE_PREFIX}.${extension}`;
+  const destination = getFloorplanPath(filename);
+
+  const current = await getFloorplanState();
+  if (current.hasCustomImage && current.filename && current.filename !== filename) {
+    try {
+      await fs.unlink(getFloorplanPath(current.filename));
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        logger.error("Failed to remove previous floorplan image", error);
+        throw error;
+      }
+    }
+  }
+
+  await fs.writeFile(destination, buffer);
+  const metadata = {
+    filename,
+    mimeType,
+    updatedAt,
+    originalName: normalizedName,
+    size: buffer.length
+  };
+  await writeFloorplanMeta(metadata);
+  logger.info("Floorplan image updated", {
+    filename,
+    mimeType,
+    size: buffer.length
+  });
+  return {
+    storage: "file",
+    ...metadata
+  };
+}
+
+async function deleteFloorplanImage() {
+  if (MONGODB_ENABLED) {
+    const database = (await db).default;
+    if (!database) {
+      throw new Error("MongoDB connection is not available.");
+    }
+    const result = await database
+      .collection(FLOORPLAN_COLLECTION)
+      .deleteOne({ _id: FLOORPLAN_DOCUMENT_ID });
+    logger.info("Removed custom floorplan image from MongoDB", {
+      deletedCount: result.deletedCount
+    });
+    return;
+  }
+
+  const current = await getFloorplanState();
+  if (current.hasCustomImage && current.filename) {
+    try {
+      await fs.unlink(getFloorplanPath(current.filename));
+      logger.info("Removed custom floorplan image", { filename: current.filename });
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        logger.error("Failed to delete floorplan image", error);
+        throw error;
+      }
+    }
+  }
+  await removeFloorplanMeta();
 }
 
 async function appendCancellation(entries) {
@@ -238,6 +495,102 @@ app.post("/api/admin/verify", (req, res) => {
   } else {
     logger.warn("Admin verification failed");
     res.status(401).json({ message: "Password is not valid." });
+  }
+});
+
+app.get("/api/floorplan", async (_req, res, next) => {
+  try {
+    const state = await getFloorplanState();
+    const cacheKey = state.updatedAt ?? "default";
+    res.json({
+      hasCustomImage: state.hasCustomImage,
+      imageUrl: `/api/floorplan/image?cache=${encodeURIComponent(cacheKey)}`,
+      updatedAt: state.updatedAt
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/floorplan/image", async (_req, res, next) => {
+  try {
+    const cacheControl = "no-store, must-revalidate";
+    res.setHeader("Cache-Control", cacheControl);
+    const state = await getFloorplanState();
+    if (MONGODB_ENABLED) {
+      if (state.hasCustomImage) {
+        const database = (await db).default;
+        if (!database) {
+          throw new Error("MongoDB connection is not available.");
+        }
+        const document = await database.collection(FLOORPLAN_COLLECTION).findOne(
+          { _id: FLOORPLAN_DOCUMENT_ID },
+          { projection: { data: 1, mimeType: 1 } }
+        );
+        if (document?.data && typeof document.data === "string") {
+          const imageBuffer = Buffer.from(document.data, "base64");
+          if (imageBuffer.length > 0) {
+            res.setHeader("Content-Type", document.mimeType ?? "application/octet-stream");
+            res.setHeader("Content-Length", imageBuffer.length);
+            res.send(imageBuffer);
+            return;
+          }
+        }
+      }
+      res.sendFile(DEFAULT_FLOORPLAN_IMAGE);
+      return;
+    }
+
+    if (state.hasCustomImage && state.filename) {
+      res.sendFile(getFloorplanPath(state.filename));
+      return;
+    }
+    res.sendFile(DEFAULT_FLOORPLAN_IMAGE);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/floorplan", requireAdmin, async (req, res, next) => {
+  if (!req.body || typeof req.body !== "object") {
+    res.status(400).json({ message: "Request body is required." });
+    return;
+  }
+
+  const dataUrl = req.body.dataUrl;
+  const originalName = req.body.name;
+  if (typeof dataUrl !== "string") {
+    res.status(400).json({ message: "Property 'dataUrl' is required." });
+    return;
+  }
+
+  try {
+    const metadata = await saveFloorplanImage({ dataUrl, originalName });
+    const cacheKey = metadata.updatedAt ?? "default";
+    res.json({
+      hasCustomImage: true,
+      imageUrl: `/api/floorplan/image?cache=${encodeURIComponent(cacheKey)}`,
+      updatedAt: metadata.updatedAt
+    });
+  } catch (error) {
+    if (error instanceof Error && !error.code) {
+      res.status(400).json({ message: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.delete("/api/floorplan", requireAdmin, async (_req, res, next) => {
+  try {
+    await deleteFloorplanImage();
+    res.json({
+      hasCustomImage: false,
+      imageUrl: `/api/floorplan/image?cache=${encodeURIComponent("default")}`,
+      updatedAt: null
+    });
+  } catch (error) {
+    next(error);
   }
 });
 

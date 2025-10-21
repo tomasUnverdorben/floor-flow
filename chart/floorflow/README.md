@@ -91,6 +91,8 @@ Bookings, seats, and logs are stored under `/app/server/data`:
 - When `persistence.enabled=true`, the chart provisions a PVC named `<release>-floorflow-data` so data survives pod restarts.
 - When disabled, an `emptyDir` volume is used and all data resets on pod recreation.
 
+Floor plan uploads follow the same logic by default. When MongoDB support is enabled (`mongodb.enabled=true`), uploaded floor plan images are stored inside the MongoDB database instead of the PVC, so you can safely disable persistence for purely database-backed installs.
+
 An init container copies `chart/floorflow/files/seats.json` into the data directory the first time the pod starts (or whenever `seats.json` is missing). Update that file before packaging or running `helm upgrade` to ship different default seats. After the application writes its own `seats.json`, subsequent upgrades keep the PVC content intact.
 
 ### Additional environment variables

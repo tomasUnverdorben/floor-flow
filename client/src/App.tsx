@@ -37,6 +37,12 @@ type StatusBanner =
   | { type: "error"; message: string }
   | null;
 
+type FloorplanInfoResponse = {
+  hasCustomImage: boolean;
+  imageUrl: string;
+  updatedAt: string | null;
+};
+
 type RecurrenceFrequency = "none" | "daily" | "weekly";
 
 type BookingConflict = {
@@ -105,6 +111,18 @@ const getDateNDaysAgo = (days: number) => {
 
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
 const normalizeCoordinate = (value: number) => Math.round(clamp(value, 0, 100) * 10) / 10;
+
+const resolveApiPath = (path: string) => {
+  if (!path) {
+    return path;
+  }
+  if (!API_BASE_URL) {
+    return path.startsWith("/") ? path : `/${path}`;
+  }
+  const base = API_BASE_URL.endsWith("/") ? API_BASE_URL.slice(0, -1) : API_BASE_URL;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${normalizedPath}`;
+};
 
 const isBookingRecord = (candidate: unknown): candidate is Booking => {
   if (!candidate || typeof candidate !== "object") {
@@ -291,6 +309,10 @@ function MainDashboard() {
   const [floorplanSize, setFloorplanSize] = useState<{ width: number; height: number } | null>(
     null
   );
+  const [floorplanImageUrl, setFloorplanImageUrl] = useState(resolveApiPath("/floorplan.png"));
+  const [hasCustomFloorplan, setHasCustomFloorplan] = useState(false);
+  const [isFloorplanUploading, setIsFloorplanUploading] = useState(false);
+  const [isFloorplanDeleting, setIsFloorplanDeleting] = useState(false);
   const [adminSecret, setAdminSecret] = useState<string | null>(null);
   const [isEditorAuthorized, setIsEditorAuthorized] = useState(false);
   const [repeatFrequency, setRepeatFrequency] = useState<RecurrenceFrequency>("none");
@@ -305,6 +327,7 @@ function MainDashboard() {
   } | null>(null);
   const floorplanRef = useRef<HTMLDivElement | null>(null);
   const floorplanContentRef = useRef<HTMLDivElement | null>(null);
+  const floorplanFileInputRef = useRef<HTMLInputElement | null>(null);
   const dragOriginalSeatRef = useRef<Seat | null>(null);
   const dragLatestPositionRef = useRef<{ x: number; y: number } | null>(null);
   const seatsRef = useRef<Seat[]>([]);
@@ -480,6 +503,24 @@ function MainDashboard() {
     []
   );
 
+  const fetchFloorplanInfo = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/floorplan`);
+      if (!response.ok) {
+        throw new Error(`Failed to load floor plan (status ${response.status})`);
+      }
+      const payload: FloorplanInfoResponse = await response.json();
+      setFloorplanImageUrl(resolveApiPath(payload.imageUrl));
+      setHasCustomFloorplan(Boolean(payload.hasCustomImage));
+    } catch (error) {
+      console.error(error);
+      setStatusBanner({
+        type: "error",
+        message: "Failed to load the floor plan image. Please refresh the page."
+      });
+    }
+  }, []);
+
   const fetchSeats = useCallback(async () => {
     setIsLoadingSeats(true);
     try {
@@ -532,6 +573,14 @@ function MainDashboard() {
   useEffect(() => {
     fetchAllBookings();
   }, [fetchAllBookings]);
+
+  useEffect(() => {
+    fetchFloorplanInfo();
+  }, [fetchFloorplanInfo]);
+
+  useEffect(() => {
+    setFloorplanSize(null);
+  }, [floorplanImageUrl]);
 
   useEffect(() => {
     const loadBookings = async (date: string) => {
@@ -830,8 +879,9 @@ function MainDashboard() {
           if (!(booking.id in current)) {
             return current;
           }
-          const { [booking.id]: _removed, ...rest } = current;
-          return rest;
+          const updated = { ...current };
+          delete updated[booking.id];
+          return updated;
         });
         return;
       }
@@ -897,8 +947,9 @@ function MainDashboard() {
             if (!(booking.id in current)) {
               return current;
             }
-            const { [booking.id]: _removed, ...rest } = current;
-            return rest;
+            const updated = { ...current };
+            delete updated[booking.id];
+            return updated;
           });
         }
       }
@@ -1013,8 +1064,9 @@ function MainDashboard() {
           if (!(booking.id in current)) {
             return current;
           }
-          const { [booking.id]: _removed, ...rest } = current;
-          return rest;
+          const updated = { ...current };
+          delete updated[booking.id];
+          return updated;
         });
       }
     },
@@ -1110,6 +1162,148 @@ function MainDashboard() {
         floorplanRef.current.scrollTo({ left: 0, top: 0, behavior: "smooth" });
       }
     });
+  };
+
+  const handleOpenFloorplanPicker = () => {
+    floorplanFileInputRef.current?.click();
+  };
+
+  const handleFloorplanFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setStatusBanner({
+        type: "error",
+        message: "The floor plan image must be 5 MB or smaller."
+      });
+      return;
+    }
+
+    const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
+    if (!allowedTypes.includes(file.type)) {
+      setStatusBanner({
+        type: "error",
+        message: "Only PNG, JPG or WEBP images are supported."
+      });
+      return;
+    }
+
+    try {
+      setIsFloorplanUploading(true);
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (typeof reader.result === "string") {
+            resolve(reader.result);
+          } else {
+            reject(new Error("Failed to read the selected file."));
+          }
+        };
+        reader.onerror = () => reject(new Error("Failed to read the selected file."));
+        reader.readAsDataURL(file);
+      });
+
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (adminSecret) {
+        headers["x-admin-secret"] = adminSecret;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/floorplan`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          dataUrl,
+          name: file.name
+        })
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          handleAdminUnauthorized();
+          return;
+        }
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(
+          typeof payload?.message === "string"
+            ? payload.message
+            : `Failed to upload the floor plan (status ${response.status}).`
+        );
+      }
+
+      const payload: FloorplanInfoResponse = await response.json();
+      setFloorplanImageUrl(resolveApiPath(payload.imageUrl));
+      setHasCustomFloorplan(Boolean(payload.hasCustomImage));
+      handleResetView();
+      setStatusBanner({
+        type: "success",
+        message: "Floor plan image has been updated."
+      });
+    } catch (error) {
+      console.error(error);
+      if (error instanceof Error) {
+        setStatusBanner({ type: "error", message: error.message });
+      } else {
+        setStatusBanner({
+          type: "error",
+          message: "Failed to upload the floor plan image."
+        });
+      }
+    } finally {
+      setIsFloorplanUploading(false);
+    }
+  };
+
+  const handleFloorplanRemove = async () => {
+    try {
+      setIsFloorplanDeleting(true);
+      const headers: Record<string, string> = {};
+      if (adminSecret) {
+        headers["x-admin-secret"] = adminSecret;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/floorplan`, {
+        method: "DELETE",
+        headers
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          handleAdminUnauthorized();
+          return;
+        }
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(
+          typeof payload?.message === "string"
+            ? payload.message
+            : `Failed to remove the floor plan (status ${response.status}).`
+        );
+      }
+
+      const payload: FloorplanInfoResponse = await response.json();
+      setFloorplanImageUrl(resolveApiPath(payload.imageUrl));
+      setHasCustomFloorplan(Boolean(payload.hasCustomImage));
+      handleResetView();
+      setStatusBanner({
+        type: "success",
+        message: "Custom floor plan image has been removed."
+      });
+    } catch (error) {
+      console.error(error);
+      if (error instanceof Error) {
+        setStatusBanner({ type: "error", message: error.message });
+      } else {
+        setStatusBanner({
+          type: "error",
+          message: "Failed to remove the floor plan image."
+        });
+      }
+    } finally {
+      setIsFloorplanDeleting(false);
+    }
   };
 
   const handleToggleEditorMode = async () => {
@@ -2060,6 +2254,13 @@ function MainDashboard() {
                 Copy coordinates
               </button>
               <div className="editor-tuning">
+                <input
+                  ref={floorplanFileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  style={{ display: "none" }}
+                  onChange={handleFloorplanFileChange}
+                />
                 <label className="tuning-control">
                   <span>Map zoom</span>
                   <div className="slider-row">
@@ -2091,6 +2292,37 @@ function MainDashboard() {
                 <button type="button" className="toolbar-button subtle" onClick={handleResetView}>
                   Reset view
                 </button>
+                <label className="tuning-control">
+                  <span>Floor plan image</span>
+                  <div className="floorplan-actions">
+                    <button
+                      type="button"
+                      className="toolbar-button subtle"
+                      onClick={handleOpenFloorplanPicker}
+                      disabled={isFloorplanUploading || isFloorplanDeleting}
+                    >
+                      {isFloorplanUploading
+                        ? "Uploading..."
+                        : hasCustomFloorplan
+                        ? "Change image"
+                        : "Upload image"}
+                    </button>
+                    {hasCustomFloorplan ? (
+                      <button
+                        type="button"
+                        className="toolbar-button danger"
+                        onClick={handleFloorplanRemove}
+                        disabled={isFloorplanUploading || isFloorplanDeleting}
+                      >
+                        {isFloorplanDeleting ? "Removing..." : "Remove image"}
+                      </button>
+                    ) : null}
+                  </div>
+                  <span className="floorplan-hint">
+                    Accepted: PNG, JPG or WEBP · max 5 MB ·{" "}
+                    {hasCustomFloorplan ? "custom image in use" : "default image in use"}
+                  </span>
+                </label>
               </div>
             </>
           ) : null}
@@ -2117,7 +2349,8 @@ function MainDashboard() {
                 ref={floorplanContentRef}
               >
                 <img
-                  src="/floorplan.png"
+                  key={floorplanImageUrl}
+                  src={floorplanImageUrl}
                   alt="Office floor plan"
                   className="floorplan-image"
                   draggable={false}
