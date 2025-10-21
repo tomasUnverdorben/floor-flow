@@ -1034,6 +1034,28 @@ function MainDashboard() {
     };
   }, [floorplanSize, mapZoom]);
 
+  const getAutoFitView = useCallback(() => {
+    if (!floorplanSize) {
+      return null;
+    }
+
+    const containerWidth = floorplanRef.current?.clientWidth;
+    if (!containerWidth || containerWidth <= 0) {
+      return null;
+    }
+
+    const ratio = containerWidth / floorplanSize.width;
+    if (!Number.isFinite(ratio) || ratio <= 0) {
+      return null;
+    }
+
+    const normalized = Number(ratio.toFixed(2));
+    const zoomValue = Math.min(2, Math.max(0.3, normalized));
+    const seatScaleValue = Math.min(1.5, Math.max(0.6, normalized));
+
+    return { zoomValue, seatScaleValue };
+  }, [floorplanSize]);
+
   useEffect(() => {
     if (!floorplanRef.current || !floorplanSize) {
       previousZoomRef.current = mapZoom;
@@ -1093,9 +1115,16 @@ function MainDashboard() {
   const handleToggleEditorMode = async () => {
     if (isEditorMode) {
       setIsEditorMode(false);
-      setMapZoom(1);
-      setSeatScale(1);
-      previousZoomRef.current = 1;
+      const fitValues = getAutoFitView();
+      if (fitValues) {
+        previousZoomRef.current = fitValues.zoomValue;
+        setMapZoom(fitValues.zoomValue);
+        setSeatScale(fitValues.seatScaleValue);
+      } else {
+        previousZoomRef.current = 1;
+        setMapZoom(1);
+        setSeatScale(1);
+      }
       userAdjustedZoomRef.current = false;
       userAdjustedSeatScaleRef.current = false;
       return;
