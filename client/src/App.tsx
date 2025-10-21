@@ -8,6 +8,9 @@ type Seat = {
   label: string;
   x: number;
   y: number;
+  width: number;
+  height: number;
+  rotation: number;
   floor: number;
   zone?: string;
   notes?: string;
@@ -27,12 +30,15 @@ type SeatDraft = {
   label: string;
   x: number;
   y: number;
+  width: number;
+  height: number;
+  rotation: number;
   floor: number;
   zone?: string;
   notes?: string;
 };
 
-type SeatStyle = CSSProperties & { "--seat-scale"?: string };
+type SeatStyle = CSSProperties & { "--seat-scale"?: string; "--seat-rotation"?: string };
 
 type StatusBanner =
   | { type: "success" | "info"; message: string }
@@ -130,6 +136,57 @@ const getDateNDaysAgo = (days: number) => {
 
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
 const normalizeCoordinate = (value: number) => Math.round(clamp(value, 0, 100) * 10) / 10;
+const clampPercentage = (value: number) => Math.min(100, Math.max(0, value));
+const roundToTwoDecimals = (value: number) => Math.round(value * 100) / 100;
+
+type SeatResizeHandle = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
+
+const RESIZE_HANDLE_CONFIG: Record<
+  SeatResizeHandle,
+  { moving: { x: number; y: number }; fixed: { x: number; y: number }; cursor: string }
+> = {
+  topLeft: { moving: { x: -1, y: -1 }, fixed: { x: 1, y: 1 }, cursor: "nwse-resize" },
+  topRight: { moving: { x: 1, y: -1 }, fixed: { x: -1, y: 1 }, cursor: "nesw-resize" },
+  bottomLeft: { moving: { x: -1, y: 1 }, fixed: { x: 1, y: -1 }, cursor: "nesw-resize" },
+  bottomRight: { moving: { x: 1, y: 1 }, fixed: { x: -1, y: -1 }, cursor: "nwse-resize" }
+};
+
+const MIN_SEAT_SIZE = 1;
+const SEAT_RESIZE_HANDLES: SeatResizeHandle[] = [
+  "topLeft",
+  "topRight",
+  "bottomLeft",
+  "bottomRight"
+];
+
+type SeatLike = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+};
+
+type ResizeState =
+  | {
+      target: "seat";
+      seatId: string;
+      handle: SeatResizeHandle;
+      original: Seat;
+      fixedLocal: { x: number; y: number };
+      cos: number;
+      sin: number;
+      hasChanges: boolean;
+    }
+  | {
+      target: "draft";
+      handle: SeatResizeHandle;
+      original: SeatDraft;
+      fixedLocal: { x: number; y: number };
+      cos: number;
+      sin: number;
+      hasChanges: boolean;
+    };
 
 const resolveApiPath = (path: string) => {
   if (!path) {
@@ -142,6 +199,30 @@ const resolveApiPath = (path: string) => {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   return `${base}${normalizedPath}`;
 };
+
+const toLocalCoordinates = (
+  seat: SeatLike,
+  point: { x: number; y: number },
+  cos: number,
+  sin: number
+) => {
+  const vx = point.x - seat.x;
+  const vy = point.y - seat.y;
+  return {
+    x: cos * vx + sin * vy,
+    y: -sin * vx + cos * vy
+  };
+};
+
+const fromLocalCoordinates = (
+  seat: SeatLike,
+  local: { x: number; y: number },
+  cos: number,
+  sin: number
+) => ({
+  x: seat.x + cos * local.x - sin * local.y,
+  y: seat.y + sin * local.x + cos * local.y
+});
 
 const isBookingRecord = (candidate: unknown): candidate is Booking => {
   if (!candidate || typeof candidate !== "object") {
@@ -332,6 +413,16 @@ function MainDashboard() {
   const [selectedFloor, setSelectedFloor] = useState<number>(1);
   const [floorplans, setFloorplans] = useState<Record<number, FloorplanInfoResponse>>({});
   const [floorCountInput, setFloorCountInput] = useState<string>("1");
+  const [isDrawingSeat, setIsDrawingSeat] = useState(false);
+  const drawingStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [draftDrawingRect, setDraftDrawingRect] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const [activeResizeTarget, setActiveResizeTarget] = useState<string | "draft" | null>(null);
+  const resizingStateRef = useRef<ResizeState | null>(null);
   const [isFloorplanUploading, setIsFloorplanUploading] = useState(false);
   const [isFloorplanDeleting, setIsFloorplanDeleting] = useState(false);
   const [adminSecret, setAdminSecret] = useState<string | null>(null);
@@ -420,6 +511,35 @@ function MainDashboard() {
         ...updatedSeat,
         x: normalizeCoordinate(updatedSeat.x),
         y: normalizeCoordinate(updatedSeat.y),
+        width: Math.max(
+          0.5,
+          Math.min(
+            100,
+            Number(
+              updatedSeat.width ??
+                (typeof updates.width === "number" ? updates.width : undefined) ??
+                existingSeat?.width ??
+                6
+            )
+          )
+        ),
+        height: Math.max(
+          0.5,
+          Math.min(
+            100,
+            Number(
+              updatedSeat.height ??
+                (typeof updates.height === "number" ? updates.height : undefined) ??
+                existingSeat?.height ??
+                6
+            )
+          )
+        ),
+        rotation: Number.isFinite(updatedSeat.rotation)
+          ? Math.trunc(updatedSeat.rotation)
+          : typeof updates.rotation === "number"
+          ? Math.trunc(updates.rotation)
+          : existingSeat?.rotation ?? 0,
         floor: Math.max(
           1,
           Math.trunc(
@@ -442,6 +562,9 @@ function MainDashboard() {
           label: normalizedSeat.label,
           x: normalizedSeat.x,
           y: normalizedSeat.y,
+          width: normalizedSeat.width,
+          height: normalizedSeat.height,
+          rotation: normalizedSeat.rotation,
           floor: normalizedSeat.floor,
           zone: normalizedSeat.zone ?? "",
           notes: normalizedSeat.notes ?? ""
@@ -458,6 +581,9 @@ function MainDashboard() {
         ...seat,
         x: normalizeCoordinate(seat.x),
         y: normalizeCoordinate(seat.y),
+        width: Math.max(0.5, Math.min(100, Number(seat.width ?? 6))),
+        height: Math.max(0.5, Math.min(100, Number(seat.height ?? 6))),
+        rotation: Number.isFinite(seat.rotation) ? Math.trunc(seat.rotation) : 0,
         floor: Math.max(1, Math.trunc(seat.floor ?? 1))
       };
 
@@ -487,6 +613,11 @@ function MainDashboard() {
         ...createdSeat,
         x: normalizeCoordinate(createdSeat.x),
         y: normalizeCoordinate(createdSeat.y),
+        width: Math.max(0.5, Math.min(100, Number(createdSeat.width ?? payload.width ?? 6))),
+        height: Math.max(0.5, Math.min(100, Number(createdSeat.height ?? payload.height ?? 6))),
+        rotation: Number.isFinite(createdSeat.rotation)
+          ? Math.trunc(createdSeat.rotation)
+          : payload.rotation ?? 0,
         floor: Math.max(1, Math.trunc(createdSeat.floor ?? payload.floor ?? 1))
       };
       setSeats((existing) => [...existing, normalizedSeat]);
@@ -530,6 +661,8 @@ function MainDashboard() {
       type: "error",
       message: "The password is invalid or expired. Turn edit mode on again."
     });
+    setIsDrawingSeat(false);
+    setDraftDrawingRect(null);
   }, []);
 
   const verifyAdminSecret = useCallback(
@@ -567,13 +700,31 @@ function MainDashboard() {
         throw new Error(`Failed to load floor plan (status ${response.status})`);
       }
       const payload: FloorplanInfoResponse = await response.json();
+      const resolvedUrl = resolveApiPath(payload.imageUrl);
       setFloorplans((current) => ({
         ...current,
         [floor]: {
           ...payload,
-          imageUrl: resolveApiPath(payload.imageUrl)
+          imageUrl: resolvedUrl
         }
       }));
+      setBuildingInfo((current) =>
+        current
+          ? {
+              ...current,
+              floors: current.floors.map((floorInfo) =>
+                floorInfo.index === payload.floor
+                  ? {
+                      ...floorInfo,
+                      hasFloorplan: Boolean(payload.hasCustomImage),
+                      updatedAt: payload.updatedAt,
+                      imageUrl: resolvedUrl
+                    }
+                  : floorInfo
+              )
+            }
+          : current
+      );
     } catch (error) {
       console.error(error);
       setStatusBanner({
@@ -629,6 +780,9 @@ function MainDashboard() {
         ...seat,
         x: normalizeCoordinate(seat.x),
         y: normalizeCoordinate(seat.y),
+        width: Math.max(0.5, Math.min(100, Number(seat.width ?? 6))),
+        height: Math.max(0.5, Math.min(100, Number(seat.height ?? 6))),
+        rotation: Number.isFinite(seat.rotation) ? Math.trunc(seat.rotation) : 0,
         floor: Math.max(1, Math.trunc(seat.floor ?? 1))
       }));
       setSeats(normalizedSeats);
@@ -778,6 +932,9 @@ function MainDashboard() {
       setDraggingSeatId(null);
       dragOriginalSeatRef.current = null;
       dragLatestPositionRef.current = null;
+      drawingStartRef.current = null;
+      setDraftDrawingRect(null);
+      setIsDrawingSeat(false);
     }
   }, [isEditorMode]);
 
@@ -795,6 +952,11 @@ function MainDashboard() {
               label: selectedSeat.label,
               x: normalizeCoordinate(selectedSeat.x),
               y: normalizeCoordinate(selectedSeat.y),
+              width: Math.max(0.5, Math.min(100, Number(selectedSeat.width ?? 6))),
+              height: Math.max(0.5, Math.min(100, Number(selectedSeat.height ?? 6))),
+              rotation: Number.isFinite(selectedSeat.rotation)
+                ? Math.trunc(selectedSeat.rotation)
+                : 0,
               floor: Math.max(1, Math.trunc(selectedSeat.floor)),
               zone: selectedSeat.zone ?? "",
               notes: selectedSeat.notes ?? ""
@@ -823,10 +985,18 @@ function MainDashboard() {
       const normalizedX = normalizeCoordinate(latestSeat.x);
       const normalizedY = normalizeCoordinate(latestSeat.y);
       const normalizedFloor = Math.max(1, Math.trunc(latestSeat.floor));
+      const normalizedWidth = Math.max(0.5, Math.min(100, Number(latestSeat.width ?? current.width ?? 6)));
+      const normalizedHeight = Math.max(0.5, Math.min(100, Number(latestSeat.height ?? current.height ?? 6)));
+      const normalizedRotation = Number.isFinite(latestSeat.rotation)
+        ? Math.trunc(latestSeat.rotation)
+        : current.rotation ?? 0;
       if (
         Math.abs(current.x - normalizedX) < 0.0001 &&
         Math.abs(current.y - normalizedY) < 0.0001 &&
-        current.floor === normalizedFloor
+        current.floor === normalizedFloor &&
+        Math.abs(current.width - normalizedWidth) < 0.0001 &&
+        Math.abs(current.height - normalizedHeight) < 0.0001 &&
+        current.rotation === normalizedRotation
       ) {
         return current;
       }
@@ -835,6 +1005,9 @@ function MainDashboard() {
         ...current,
         x: normalizedX,
         y: normalizedY,
+        width: normalizedWidth,
+        height: normalizedHeight,
+        rotation: normalizedRotation,
         floor: normalizedFloor
       };
     });
@@ -1307,7 +1480,11 @@ function MainDashboard() {
   const handleFloorSelect = (event: ChangeEvent<HTMLSelectElement>) => {
     const parsed = Number(event.target.value);
     if (Number.isFinite(parsed)) {
-      setSelectedFloor(Math.max(1, Math.trunc(parsed)));
+      const normalized = Math.max(1, Math.trunc(parsed));
+      setSelectedFloor(normalized);
+      if (!floorplans[normalized]) {
+        void fetchFloorplanInfo(normalized);
+      }
     }
   };
 
@@ -1690,7 +1867,366 @@ function MainDashboard() {
     setStatusBanner(null);
   };
 
+  const handleStartDrawSeat = () => {
+    if (!isEditorMode) {
+      setIsEditorMode(true);
+    }
+    setDraftSeat(null);
+    setSeatEditorDraft(null);
+    setSelectedSeatId(null);
+    setIsDrawingSeat(true);
+    setDraftDrawingRect(null);
+    setStatusBanner({
+      type: "info",
+      message: "Click and drag on the floor plan to draw the seat area."
+    });
+  };
+
+  const getPointerPositionPercent = (event: { clientX: number; clientY: number }) => {
+    const rect = floorplanContentRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return null;
+    }
+    const rawX = ((event.clientX - rect.left) / rect.width) * 100;
+    const rawY = ((event.clientY - rect.top) / rect.height) * 100;
+    return {
+      x: normalizeCoordinate(rawX),
+      y: normalizeCoordinate(rawY)
+    };
+  };
+
+const finalizeDraftFromRect = (rect: {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}) => {
+  const safeWidth = Math.max(0.5, Math.min(100, rect.width));
+  const safeHeight = Math.max(0.5, Math.min(100, rect.height));
+  const centerX = normalizeCoordinate(rect.left + safeWidth / 2);
+  const centerY = normalizeCoordinate(rect.top + safeHeight / 2);
+  setDraftSeat({
+    id: "",
+    label: "",
+    x: centerX,
+    y: centerY,
+    width: Math.round(safeWidth * 100) / 100,
+    height: Math.round(safeHeight * 100) / 100,
+    rotation: 0,
+    floor: selectedFloor,
+    zone: "",
+    notes: ""
+  });
+  setSeatEditorDraft(null);
+  setSelectedSeatId(null);
+  setStatusBanner({
+    type: "info",
+    message: "Seat area captured. Review the details and save."
+  });
+};
+
+const handleSeatResizePointerMove = useCallback((event: PointerEvent) => {
+  const state = resizingStateRef.current;
+  if (!state) {
+    return;
+  }
+  const pointer = getPointerPositionPercent(event);
+  if (!pointer) {
+    return;
+  }
+
+  const original = state.original;
+  const cos = state.cos;
+  const sin = state.sin;
+  const pointerLocal = toLocalCoordinates(original, pointer, cos, sin);
+  const fixedLocal = state.fixedLocal;
+
+  const diffX = fixedLocal.x - pointerLocal.x;
+  const diffY = fixedLocal.y - pointerLocal.y;
+
+  let width = Math.abs(diffX);
+  let height = Math.abs(diffY);
+
+  const minSize = MIN_SEAT_SIZE;
+  width = Math.min(100, Math.max(minSize, width));
+  height = Math.min(100, Math.max(minSize, height));
+
+  const directionX = diffX >= 0 ? 1 : -1;
+  const directionY = diffY >= 0 ? 1 : -1;
+
+  const adjustedPointerLocalX = fixedLocal.x - directionX * width;
+  const adjustedPointerLocalY = fixedLocal.y - directionY * height;
+
+  const centerLocal = {
+    x: (adjustedPointerLocalX + fixedLocal.x) / 2,
+    y: (adjustedPointerLocalY + fixedLocal.y) / 2
+  };
+
+  const newCenterWorld = fromLocalCoordinates(original, centerLocal, cos, sin);
+  const normalizedCenterX = clampPercentage(newCenterWorld.x);
+  const normalizedCenterY = clampPercentage(newCenterWorld.y);
+  const roundedWidth = roundToTwoDecimals(width);
+  const roundedHeight = roundToTwoDecimals(height);
+
+  if (state.target === "seat") {
+    const seatId = state.seatId;
+    setSeats((existing) =>
+      existing.map((seat) =>
+        seat.id === seatId
+          ? {
+              ...seat,
+              x: normalizeCoordinate(normalizedCenterX),
+              y: normalizeCoordinate(normalizedCenterY),
+              width: roundedWidth,
+              height: roundedHeight,
+              rotation: seat.rotation ?? state.original.rotation
+            }
+          : seat
+      )
+    );
+    setSeatEditorDraft((current) =>
+      current && current.id === seatId
+        ? {
+            ...current,
+            x: normalizeCoordinate(normalizedCenterX),
+            y: normalizeCoordinate(normalizedCenterY),
+            width: roundedWidth,
+            height: roundedHeight,
+            rotation: current.rotation ?? state.original.rotation
+          }
+        : current
+    );
+  } else {
+    setDraftSeat((current) =>
+      current
+        ? {
+            ...current,
+            x: normalizeCoordinate(normalizedCenterX),
+            y: normalizeCoordinate(normalizedCenterY),
+            width: roundedWidth,
+            height: roundedHeight
+          }
+        : current
+    );
+  }
+
+  state.hasChanges = true;
+}, []);
+
+const handleSeatResizePointerUp = useCallback(async () => {
+  const state = resizingStateRef.current;
+  if (!state) {
+    return;
+  }
+  window.removeEventListener("pointermove", handleSeatResizePointerMove);
+  window.removeEventListener("pointerup", handleSeatResizePointerUp);
+  resizingStateRef.current = null;
+  setActiveResizeTarget(null);
+
+  if (!state.hasChanges) {
+    return;
+  }
+
+  if (state.target === "seat") {
+    const latestSeat = seatsRef.current.find((seat) => seat.id === state.seatId);
+    if (!latestSeat) {
+      return;
+    }
+    try {
+      await updateSeatOnServer(state.seatId, {
+        x: latestSeat.x,
+        y: latestSeat.y,
+        width: latestSeat.width,
+        height: latestSeat.height,
+        rotation: latestSeat.rotation
+      });
+    } catch (error) {
+      console.error(error);
+      if (error instanceof Error && error.message === ADMIN_UNAUTHORIZED_ERROR) {
+        handleAdminUnauthorized();
+      } else {
+        setStatusBanner({
+          type: "error",
+          message: error instanceof Error ? error.message : "Failed to update the seat."
+        });
+      }
+    }
+  }
+}, [handleAdminUnauthorized, handleSeatResizePointerMove, setStatusBanner, updateSeatOnServer]);
+
+const handleSeatResizePointerDown = (
+  target: "seat" | "draft",
+  seatData: Seat | SeatDraft,
+  handle: SeatResizeHandle,
+  event: React.PointerEvent
+) => {
+  if (!isEditorMode) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+
+  const rotation = seatData.rotation ?? 0;
+  const radians = (rotation * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const halfWidth = (seatData.width ?? 6) / 2;
+  const halfHeight = (seatData.height ?? 6) / 2;
+  const config = RESIZE_HANDLE_CONFIG[handle];
+  const fixedLocal = {
+    x: config.fixed.x * halfWidth,
+    y: config.fixed.y * halfHeight
+  };
+
+  resizingStateRef.current =
+    target === "seat"
+      ? {
+          target: "seat",
+          seatId: (seatData as Seat).id,
+          handle,
+          original: seatData as Seat,
+          fixedLocal,
+          cos,
+          sin,
+          hasChanges: false
+        }
+      : {
+          target: "draft",
+          handle,
+          original: seatData as SeatDraft,
+          fixedLocal,
+          cos,
+          sin,
+          hasChanges: false
+        };
+
+  setActiveResizeTarget(target === "seat" ? (seatData as Seat).id : "draft");
+  setIsDrawingSeat(false);
+  setDraftDrawingRect(null);
+  drawingStartRef.current = null;
+
+  if (target === "seat") {
+    setSelectedSeatId((seatData as Seat).id);
+  }
+
+  window.addEventListener("pointermove", handleSeatResizePointerMove);
+  window.addEventListener("pointerup", handleSeatResizePointerUp);
+};
+
+const renderResizeHandles = (
+  target: "seat" | "draft",
+  seatData: Seat | SeatDraft,
+  show: boolean
+) => {
+  if (!show) {
+    return null;
+  }
+  return SEAT_RESIZE_HANDLES.map((handle) => (
+    <span
+      key={handle}
+      className={`seat-resize-handle seat-resize-${handle}`}
+      style={{ cursor: RESIZE_HANDLE_CONFIG[handle].cursor }}
+      onPointerDown={(event) => handleSeatResizePointerDown(target, seatData, handle, event)}
+    />
+  ));
+};
+
+  useEffect(() => {
+    return () => {
+      window.removeEventListener("pointermove", handleSeatResizePointerMove);
+      window.removeEventListener("pointerup", handleSeatResizePointerUp);
+    };
+  }, [handleSeatResizePointerMove, handleSeatResizePointerUp]);
+
+  const handleFloorplanPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isEditorMode || !isDrawingSeat) {
+      return;
+    }
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+    const start = getPointerPositionPercent(event);
+    if (!start) {
+      return;
+    }
+    drawingStartRef.current = start;
+    setDraftDrawingRect({ left: start.x, top: start.y, width: 0, height: 0 });
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const handleFloorplanPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!drawingStartRef.current) {
+      return;
+    }
+    const current = getPointerPositionPercent(event);
+    if (!current) {
+      return;
+    }
+    event.preventDefault();
+    const start = drawingStartRef.current;
+    const left = Math.min(start.x, current.x);
+    const top = Math.min(start.y, current.y);
+    const width = Math.abs(current.x - start.x);
+    const height = Math.abs(current.y - start.y);
+    setDraftDrawingRect({ left, top, width, height });
+  };
+
+  const handleFloorplanPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!drawingStartRef.current) {
+      return;
+    }
+    event.preventDefault();
+    try {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    } catch (releaseError) {
+      console.warn(releaseError);
+    }
+    setIsDrawingSeat(false);
+    setDraftDrawingRect(null);
+    const start = drawingStartRef.current;
+    drawingStartRef.current = null;
+    const end = getPointerPositionPercent(event) ?? start;
+    if (!start || !end) {
+      return;
+    }
+    const left = Math.min(start.x, end.x);
+    const top = Math.min(start.y, end.y);
+    const width = Math.abs(end.x - start.x);
+    const height = Math.abs(end.y - start.y);
+
+    if (width < 0.5 && height < 0.5) {
+      // Treat as a simple click
+      setDraftSeat({
+        id: "",
+        label: "",
+        x: normalizeCoordinate(end.x),
+        y: normalizeCoordinate(end.y),
+        width: 6,
+        height: 6,
+        rotation: 0,
+        floor: selectedFloor,
+        zone: "",
+        notes: ""
+      });
+      setSeatEditorDraft(null);
+      setSelectedSeatId(null);
+      setStatusBanner({
+        type: "info",
+        message: "Seat added. Adjust details if needed."
+      });
+      return;
+    }
+
+    finalizeDraftFromRect({ left, top, width, height });
+  };
+
   const handleFloorplanClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (isDrawingSeat || draftDrawingRect) {
+      return;
+    }
     if (!isEditorMode || !draftSeat) {
       return;
     }
@@ -1714,11 +2250,16 @@ function MainDashboard() {
     if (!isEditorMode) {
       setIsEditorMode(true);
     }
+    setIsDrawingSeat(false);
+    setDraftDrawingRect(null);
     setDraftSeat({
       id: "",
       label: "",
       x: 50,
       y: 50,
+      width: 8,
+      height: 6,
+      rotation: 0,
       floor: selectedFloor,
       zone: "",
       notes: ""
@@ -1742,6 +2283,22 @@ function MainDashboard() {
           return current;
         }
         return { ...current, [field]: normalizeCoordinate(numeric) };
+      }
+      if (field === "width" || field === "height") {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          return current;
+        }
+        const normalized = Math.max(0.5, Math.min(100, Math.round(numeric * 100) / 100));
+        return { ...current, [field]: normalized };
+      }
+      if (field === "rotation") {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          return current;
+        }
+        const normalized = Math.trunc(((numeric % 360) + 360) % 360);
+        return { ...current, rotation: normalized };
       }
       if (field === "floor") {
         const numeric = Number(value);
@@ -1789,6 +2346,9 @@ function MainDashboard() {
         label: trimmedLabel || trimmedId,
         x: normalizeCoordinate(draftSeat.x),
         y: normalizeCoordinate(draftSeat.y),
+        width: draftSeat.width,
+        height: draftSeat.height,
+        rotation: draftSeat.rotation,
         floor: draftSeat.floor,
         zone: trimmedZone,
         notes: trimmedNotes
@@ -1802,6 +2362,9 @@ function MainDashboard() {
         label: created.label,
         x: created.x,
         y: created.y,
+        width: created.width,
+        height: created.height,
+        rotation: created.rotation,
         floor: created.floor,
         zone: created.zone ?? "",
         notes: created.notes ?? ""
@@ -1826,6 +2389,8 @@ function MainDashboard() {
 
   const handleCancelDraft = () => {
     setDraftSeat(null);
+    setDraftDrawingRect(null);
+    setIsDrawingSeat(false);
     setStatusBanner(null);
   };
 
@@ -1841,6 +2406,24 @@ function MainDashboard() {
           return current;
         }
         return { ...current, [field]: normalizeCoordinate(numeric) };
+      }
+
+      if (field === "width" || field === "height") {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          return current;
+        }
+        const normalized = Math.max(0.5, Math.min(100, Math.round(numeric * 100) / 100));
+        return { ...current, [field]: normalized };
+      }
+
+      if (field === "rotation") {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          return current;
+        }
+        const normalized = Math.trunc(((numeric % 360) + 360) % 360);
+        return { ...current, rotation: normalized };
       }
 
       if (field === "floor") {
@@ -1880,6 +2463,9 @@ function MainDashboard() {
         label: trimmedLabel,
         x: seatEditorDraft.x,
         y: seatEditorDraft.y,
+        width: seatEditorDraft.width,
+        height: seatEditorDraft.height,
+        rotation: seatEditorDraft.rotation,
         floor: seatEditorDraft.floor,
         zone: trimmedZone,
         notes: trimmedNotes
@@ -1891,6 +2477,9 @@ function MainDashboard() {
               label: trimmedLabel,
               x: normalizeCoordinate(seatEditorDraft.x),
               y: normalizeCoordinate(seatEditorDraft.y),
+              width: seatEditorDraft.width,
+              height: seatEditorDraft.height,
+              rotation: seatEditorDraft.rotation,
               floor: Math.max(1, Math.trunc(seatEditorDraft.floor)),
               zone: trimmedZone,
               notes: trimmedNotes
@@ -2543,9 +3132,17 @@ function MainDashboard() {
                 type="button"
                 className="toolbar-button subtle"
                 onClick={handleStartCreateSeat}
-                disabled={Boolean(draftSeat)}
+                disabled={Boolean(draftSeat) || isDrawingSeat}
               >
                 Add new seat
+              </button>
+              <button
+                type="button"
+                className="toolbar-button subtle"
+                onClick={handleStartDrawSeat}
+                disabled={isDrawingSeat || Boolean(draftSeat)}
+              >
+                {isDrawingSeat ? "Drawing…" : "Draw seat area"}
               </button>
               <button
                 type="button"
@@ -2683,6 +3280,9 @@ function MainDashboard() {
                 className="floorplan-content"
                 style={floorplanContentStyle}
                 ref={floorplanContentRef}
+                onPointerDown={handleFloorplanPointerDown}
+                onPointerMove={handleFloorplanPointerMove}
+                onPointerUp={handleFloorplanPointerUp}
               >
                 <img
                   key={floorplanImageUrl}
@@ -2713,60 +3313,95 @@ function MainDashboard() {
                     }
                   }}
                 />
+                {draftDrawingRect ? (
+                  <div
+                    className="seat-drawing-overlay"
+                    style={{
+                      left: `${draftDrawingRect.left}%`,
+                      top: `${draftDrawingRect.top}%`,
+                      width: `${draftDrawingRect.width}%`,
+                      height: `${draftDrawingRect.height}%`
+                    }}
+                  />
+                ) : null}
                 {!isLoadingSeats && seatsOnFloor.length > 0
                   ? seatsOnFloor.map((seat) => {
                       const isBooked = isSeatBooked(seat.id);
                       const isSelected = seat.id === selectedSeatId;
-                      const seatStyle: SeatStyle = {
+                      const showHandles =
+                        isEditorMode &&
+                        (isSelected || activeResizeTarget === seat.id);
+                      const seatWrapperStyle: SeatStyle = {
                         left: `${seat.x}%`,
                         top: `${seat.y}%`,
-                        "--seat-scale": seatScale.toFixed(2)
+                        width: `${seat.width}%`,
+                        height: `${seat.height}%`,
+                        "--seat-scale": seatScale.toFixed(2),
+                        "--seat-rotation": `${seat.rotation ?? 0}deg`
                       };
                       return (
-                        <button
+                        <div
                           key={seat.id}
-                          type="button"
                           className={[
-                            "seat-button",
-                            isBooked ? "seat-booked" : "seat-available",
-                            isSelected ? "seat-selected" : "",
+                            "seat-wrapper",
                             isEditorMode ? "seat-editor" : "",
                             draggingSeatId === seat.id ? "seat-dragging" : ""
                           ]
                             .filter(Boolean)
                             .join(" ")}
-                          style={seatStyle}
+                          style={seatWrapperStyle}
                           onClick={(event) => {
                             event.stopPropagation();
                             handleSeatClick(seat.id);
                           }}
-                          onPointerDown={(event) => handleSeatPointerDown(seat.id, event)}
                         >
-                          <span className="seat-label">{seat.label}</span>
-                          {isEditorMode ? (
-                            <span className="seat-coords">
-                              {seat.x.toFixed(1)}%, {seat.y.toFixed(1)}%
-                            </span>
-                          ) : null}
-                        </button>
+                          <button
+                            type="button"
+                            className={[
+                              "seat-button",
+                              isBooked ? "seat-booked" : "seat-available",
+                              isSelected ? "seat-selected" : ""
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
+                            onPointerDown={(event) => handleSeatPointerDown(seat.id, event)}
+                          >
+                            <span className="seat-label">{seat.label}</span>
+                            {isEditorMode ? (
+                              <span className="seat-coords">
+                                {seat.x.toFixed(1)}%, {seat.y.toFixed(1)}% · {seat.width.toFixed(1)}×
+                                {seat.height.toFixed(1)}% · {seat.rotation.toFixed(0)}°
+                              </span>
+                            ) : null}
+                          </button>
+                          {renderResizeHandles("seat", seat, showHandles)}
+                        </div>
                       );
                     })
                   : null}
                 {draftSeat && draftSeat.floor === selectedFloor ? (
                   <div
-                    className="seat-button seat-draft"
+                    className="seat-wrapper seat-draft"
                     style={{
                       left: `${draftSeat.x}%`,
                       top: `${draftSeat.y}%`,
-                      "--seat-scale": seatScale.toFixed(2)
+                      width: `${draftSeat.width}%`,
+                      height: `${draftSeat.height}%`,
+                      "--seat-scale": seatScale.toFixed(2),
+                      "--seat-rotation": `${draftSeat.rotation ?? 0}deg`
                     } as SeatStyle}
                   >
-                    <span className="seat-label">
-                      {draftSeat.label ? draftSeat.label : "New seat"}
-                    </span>
-                    <span className="seat-coords">
-                      {draftSeat.x.toFixed(1)}%, {draftSeat.y.toFixed(1)}%
-                    </span>
+                    <button type="button" className="seat-button">
+                      <span className="seat-label">
+                        {draftSeat.label ? draftSeat.label : "New seat"}
+                      </span>
+                      <span className="seat-coords">
+                        {draftSeat.x.toFixed(1)}%, {draftSeat.y.toFixed(1)}% ·
+                        {draftSeat.width.toFixed(1)}×{draftSeat.height.toFixed(1)}% ·
+                        {draftSeat.rotation.toFixed(0)}°
+                      </span>
+                    </button>
+                    {renderResizeHandles("draft", draftSeat, isEditorMode)}
                   </div>
                 ) : null}
               </div>
@@ -2893,6 +3528,39 @@ function MainDashboard() {
                             ))}
                           </select>
                         </label>
+                        <label>
+                          Width (%)
+                          <input
+                            type="number"
+                            min={0.5}
+                            max={100}
+                            step={0.01}
+                            value={draftSeat.width}
+                            onChange={(event) => handleDraftSeatChange("width", event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          Height (%)
+                          <input
+                            type="number"
+                            min={0.5}
+                            max={100}
+                            step={0.01}
+                            value={draftSeat.height}
+                            onChange={(event) => handleDraftSeatChange("height", event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          Rotation (°)
+                          <input
+                            type="number"
+                            min={0}
+                            max={359}
+                            step={1}
+                            value={draftSeat.rotation}
+                            onChange={(event) => handleDraftSeatChange("rotation", event.target.value)}
+                          />
+                        </label>
                       </div>
                       <div className="editor-actions">
                         <button type="submit" className="primary">
@@ -2978,6 +3646,39 @@ function MainDashboard() {
                               </option>
                             ))}
                           </select>
+                        </label>
+                        <label>
+                          Width (%)
+                          <input
+                            type="number"
+                            min={0.5}
+                            max={100}
+                            step={0.01}
+                            value={seatEditorDraft.width}
+                            onChange={(event) => handleSeatEditorChange("width", event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          Height (%)
+                          <input
+                            type="number"
+                            min={0.5}
+                            max={100}
+                            step={0.01}
+                            value={seatEditorDraft.height}
+                            onChange={(event) => handleSeatEditorChange("height", event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          Rotation (°)
+                          <input
+                            type="number"
+                            min={0}
+                            max={359}
+                            step={1}
+                            value={seatEditorDraft.rotation}
+                            onChange={(event) => handleSeatEditorChange("rotation", event.target.value)}
+                          />
                         </label>
                       </div>
                       <div className="editor-actions">

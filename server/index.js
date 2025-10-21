@@ -652,6 +652,32 @@ function parseCoordinate(value) {
   return rounded;
 }
 
+function parseDimensionPercent(value) {
+  if (typeof value === "string" && value.trim() === "") {
+    return null;
+  }
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+
+  const clamped = clamp(numeric, 0.5, 100);
+  return Math.round(clamped * 100) / 100;
+}
+
+function parseRotation(value) {
+  if (typeof value === "string" && value.trim() === "") {
+    return 0;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  const normalized = Math.trunc(numeric % 360);
+  return normalized < 0 ? normalized + 360 : normalized;
+}
+
 function normalizeText(value) {
   if (typeof value !== "string") {
     return undefined;
@@ -732,7 +758,16 @@ app.get("/api/seats", async (_req, res, next) => {
       const parsedFloor = Number(seat.floor);
       const floor = Number.isFinite(parsedFloor) ? Math.trunc(parsedFloor) : 1;
       const clampedFloor = Math.min(building.floorCount, Math.max(1, floor));
-      return { ...seat, floor: clampedFloor };
+      const width = parseDimensionPercent(seat.width) ?? 6;
+      const height = parseDimensionPercent(seat.height) ?? 6;
+      const rotation = parseRotation(seat.rotation ?? 0);
+      return {
+        ...seat,
+        floor: clampedFloor,
+        width,
+        height,
+        rotation
+      };
     });
     res.json(normalizedSeats);
   } catch (error) {
@@ -991,10 +1026,14 @@ app.delete("/api/floorplan", requireAdmin, async (_req, res, next) => {
 
 app.post("/api/seats", requireAdmin, async (req, res, next) => {
   try {
-    const { id, label, x, y, zone, notes } = req.body || {};
+    const { id, label, x, y, width, height, rotation, floor: floorInput, zone, notes } =
+      req.body || {};
     const normalizedId = normalizeText(id);
     const xCoordinate = parseCoordinate(x);
     const yCoordinate = parseCoordinate(y);
+    const widthPercent = parseDimensionPercent(width ?? 6);
+    const heightPercent = parseDimensionPercent(height ?? 6);
+    const rotationDeg = parseRotation(rotation ?? 0);
 
     if (!normalizedId || xCoordinate === null || yCoordinate === null) {
       return res.status(400).json({
@@ -1002,16 +1041,17 @@ app.post("/api/seats", requireAdmin, async (req, res, next) => {
       });
     }
 
+    if (widthPercent === null || heightPercent === null) {
+      return res.status(400).json({
+        message: "Width and height must be valid percentages between 0.5 and 100."
+      });
+    }
+
     const seats = await readJson(SEATS_FILE, []);
     const building = await readBuildingConfig();
-    let floor = 1;
-    if (typeof req.body?.floor !== "undefined" && req.body.floor !== null) {
-      const parsedFloor = Number(req.body.floor);
-      if (!Number.isFinite(parsedFloor)) {
-        return res.status(400).json({ message: "Floor must be a valid number." });
-      }
-      floor = Math.trunc(parsedFloor);
-    }
+
+    const parsedFloor = Number(floorInput);
+    const floor = Number.isFinite(parsedFloor) ? Math.trunc(parsedFloor) : 1;
     if (floor < 1 || floor > building.floorCount) {
       return res.status(400).json({
         message: `Floor must be between 1 and ${building.floorCount}.`
@@ -1030,6 +1070,9 @@ app.post("/api/seats", requireAdmin, async (req, res, next) => {
       label: normalizeText(label) || normalizedId,
       x: xCoordinate,
       y: yCoordinate,
+      width: widthPercent,
+      height: heightPercent,
+      rotation: rotationDeg,
       floor,
       zone: normalizeText(zone),
       notes: normalizeText(notes)
@@ -1052,13 +1095,14 @@ app.post("/api/seats", requireAdmin, async (req, res, next) => {
 app.put("/api/seats/:seatId", requireAdmin, async (req, res, next) => {
   try {
     const { seatId } = req.params;
-    const { label, x, y, zone, notes, floor: floorInput } = req.body || {};
+    const { label, x, y, width, height, rotation, zone, notes, floor: floorInput } =
+      req.body || {};
 
     const seats = await readJson(SEATS_FILE, []);
     const building = await readBuildingConfig();
     logger.debug("Seat update requested", {
       seatId,
-      payload: { label, x, y, zone, notes, floor: floorInput }
+      payload: { label, x, y, width, height, rotation, zone, notes, floor: floorInput }
     });
     logger.debug("Available seat IDs", {
       seatIds: seats.map((seat) => seat.id)
@@ -1116,6 +1160,30 @@ app.put("/api/seats/:seatId", requireAdmin, async (req, res, next) => {
           .json({ message: "y must be a number between 0 and 100." });
       }
       seatToUpdate.y = parsedY;
+    }
+
+    if (typeof width !== "undefined") {
+      const parsedWidth = parseDimensionPercent(width);
+      if (parsedWidth === null) {
+        return res
+          .status(400)
+          .json({ message: "Width must be a percentage between 0.5 and 100." });
+      }
+      seatToUpdate.width = parsedWidth;
+    }
+
+    if (typeof height !== "undefined") {
+      const parsedHeight = parseDimensionPercent(height);
+      if (parsedHeight === null) {
+        return res
+          .status(400)
+          .json({ message: "Height must be a percentage between 0.5 and 100." });
+      }
+      seatToUpdate.height = parsedHeight;
+    }
+
+    if (typeof rotation !== "undefined") {
+      seatToUpdate.rotation = parseRotation(rotation);
     }
 
     if (typeof floorInput !== "undefined") {

@@ -85,9 +85,11 @@ npm start
 3. Use the floor selector to pick the level you want to edit. In the toolbar you can:
    - set the total number of floors,
    - upload or remove a floor plan image for the active floor,
+   - **draw a new seat area** by clicking the *Draw seat area* button and dragging a rectangle on the map,
+   - **resize seats directly on the plan** by grabbing the corner handles,
    - drag and reposition seats,
    - add or remove seats,
-   - update labels, zones, notes, and the seat’s floor,
+   - update labels, zones, notes, floor assignment, width, height, and rotation,
    - fine-tune zoom and marker size.
 4. Changes save automatically to `server/data/seats.json` (seat coordinates/floor) and the floor-plan storage (filesystem or MongoDB).
 
@@ -98,11 +100,16 @@ Alternatively, edit the JSON directly:
   "label": "35-4",
   "x": 47.2,
   "y": 63.5,
+  "width": 7.5,
+  "height": 5.2,
+  "rotation": 0,
   "floor": 1,
   "zone": "North",
   "notes": "Near window"
 }
 ```
+
+Each seat stores its position as percentages of the floor-plan image, along with the rectangle size (`width`/`height`) and a clockwise rotation in degrees.
 
 ---
 
@@ -124,7 +131,7 @@ Alternatively, edit the JSON directly:
 | PUT | `/api/floorplans/:floor` | Upload or replace the floor-plan image *(admin)* |
 | DELETE | `/api/floorplans/:floor` | Remove the floor-plan image *(admin)* |
 | GET | `/api/seats` | Get all seats |
-| POST | `/api/seats` | Create new seat |
+| POST | `/api/seats` | Create new seat (set `x`, `y`, `width`, `height`, `rotation`, `floor`) |
 | PUT | `/api/seats/:seatId` | Update existing seat |
 | DELETE | `/api/seats/:seatId` | Remove a seat (if unbooked) |
 | GET | `/api/bookings?date=YYYY-MM-DD` | Get bookings for a date |
