@@ -82,15 +82,11 @@ npm start
 
 1. Replace `client/public/floorplan.png` with your real layout (~1600×900 recommended) for the ground floor.
 2. Start the app and toggle **Edit mode** in the top-right corner.
-3. Use the floor selector to pick the level you want to edit. In the toolbar you can:
-   - set the total number of floors,
-   - upload or remove a floor plan image for the active floor,
-   - **draw a new seat area** by clicking the *Draw seat area* button and dragging a rectangle on the map,
-   - **resize seats directly on the plan** by grabbing the corner handles,
-   - drag and reposition seats,
-   - add or remove seats,
-   - update labels, zones, notes, floor assignment, width, height, and rotation,
-   - fine-tune zoom and marker size.
+3. Use the floor selector to pick the level you want to edit. When edit mode is active a secondary toolbar appears just beneath the header:
+   - **Seat tools** let you add a new seat or toggle *Draw seat area* (click again to exit drawing). Seat rectangles can still be dragged and resized directly on the map.
+   - **Building** controls let you adjust the total number of floors; existing seats/floorplans are clamped automatically.
+   - **Floor plan image** buttons let you upload, change, or remove the map for the active floor.
+   - You can continue to drag seats, delete them, and update labels, zones, notes, floor assignment, width, height, and rotation from the side panel.
 4. Changes save automatically to `server/data/seats.json` (seat coordinates/floor) and the floor-plan storage (filesystem or MongoDB).
 
 Alternatively, edit the JSON directly:

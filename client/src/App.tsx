@@ -453,8 +453,6 @@ function MainDashboard() {
   const dragLatestPositionRef = useRef<{ x: number; y: number } | null>(null);
   const seatsRef = useRef<Seat[]>([]);
   const previousZoomRef = useRef(mapZoom);
-  const userAdjustedZoomRef = useRef(false);
-  const userAdjustedSeatScaleRef = useRef(false);
 
   useEffect(() => {
     seatsRef.current = seats;
@@ -1479,28 +1477,10 @@ function MainDashboard() {
     previousZoomRef.current = mapZoom;
   }, [mapZoom, floorplanSize]);
 
-  const handleZoomChange = (value: string) => {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) {
-      userAdjustedZoomRef.current = true;
-      setMapZoom(Number(parsed.toFixed(2)));
-    }
-  };
-
-  const handleSeatScaleChange = (value: string) => {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) {
-      userAdjustedSeatScaleRef.current = true;
-      setSeatScale(Number(parsed.toFixed(2)));
-    }
-  };
-
   const handleResetView = () => {
     setMapZoom(1);
     setSeatScale(1);
     previousZoomRef.current = 1;
-    userAdjustedZoomRef.current = false;
-    userAdjustedSeatScaleRef.current = false;
     requestAnimationFrame(() => {
       if (floorplanRef.current) {
         floorplanRef.current.scrollTo({ left: 0, top: 0, behavior: "smooth" });
@@ -1807,8 +1787,6 @@ function MainDashboard() {
         setMapZoom(1);
         setSeatScale(1);
       }
-      userAdjustedZoomRef.current = false;
-      userAdjustedSeatScaleRef.current = false;
       return;
     }
 
@@ -1907,6 +1885,12 @@ function MainDashboard() {
   };
 
   const handleStartDrawSeat = () => {
+    if (isDrawingSeat) {
+      setIsDrawingSeat(false);
+      setDraftDrawingRect(null);
+      setStatusBanner(null);
+      return;
+    }
     if (!isEditorMode) {
       setIsEditorMode(true);
     }
@@ -2578,31 +2562,6 @@ const renderResizeHandles = (
     }
   };
 
-  const handleCopySeatJson = async () => {
-    if (!navigator.clipboard) {
-      setStatusBanner({
-        type: "error",
-        message: "This browser does not support copying to the clipboard."
-      });
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(seats, null, 2));
-      setStatusBanner({
-        type: "success",
-        message: "Seat coordinates were copied to the clipboard."
-      });
-    } catch (error) {
-      console.error(error);
-      setStatusBanner({
-        type: "error",
-        message:
-          error instanceof Error ? error.message : "Failed to copy the coordinates."
-      });
-    }
-  };
-
   const handleRepeatFrequencyChange = (frequency: RecurrenceFrequency) => {
     setRepeatFrequency(frequency);
     if (frequency === "none") {
@@ -3165,71 +3124,33 @@ const renderResizeHandles = (
           >
             Statistics
           </button>
-          {isEditorMode ? (
-            <>
-              <button
-                type="button"
-                className="toolbar-button subtle"
-                onClick={handleStartCreateSeat}
-                disabled={Boolean(draftSeat) || isDrawingSeat}
-              >
-                Add new seat
-              </button>
-              <button
-                type="button"
-                className="toolbar-button subtle"
-                onClick={handleStartDrawSeat}
-                disabled={isDrawingSeat || Boolean(draftSeat)}
-              >
-                {isDrawingSeat ? "Drawing…" : "Draw seat area"}
-              </button>
-              <button
-                type="button"
-                className="toolbar-button subtle"
-                onClick={handleCopySeatJson}
-              >
-                Copy coordinates
-              </button>
-              <div className="editor-tuning">
-                <input
-                  ref={floorplanFileInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  style={{ display: "none" }}
-                  onChange={handleFloorplanFileChange}
-                />
-                <label className="tuning-control">
-                  <span>Map zoom</span>
-                  <div className="slider-row">
-                    <input
-                      type="range"
-                      min={0.3}
-                      max={2}
-                      step={0.1}
-                      value={mapZoom}
-                      onChange={(event) => handleZoomChange(event.target.value)}
-                    />
-                    <span className="slider-value">{Math.round(mapZoom * 100)}%</span>
-                  </div>
-                </label>
-                <label className="tuning-control">
-                  <span>Marker size</span>
-                  <div className="slider-row">
-                    <input
-                      type="range"
-                      min={0.6}
-                      max={1.8}
-                      step={0.1}
-                      value={seatScale}
-                      onChange={(event) => handleSeatScaleChange(event.target.value)}
-                    />
-                    <span className="slider-value">{Math.round(seatScale * 100)}%</span>
-                  </div>
-                </label>
-                <button type="button" className="toolbar-button subtle" onClick={handleResetView}>
-                  Reset view
+        </div>
+        {isEditorMode ? (
+          <div className="edit-toolbar">
+            <div className="edit-toolbar-group">
+              <span className="edit-toolbar-label">Seat tools</span>
+              <div className="edit-toolbar-actions">
+                <button
+                  type="button"
+                  className="toolbar-button subtle"
+                  onClick={handleStartCreateSeat}
+                  disabled={Boolean(draftSeat) || isDrawingSeat}
+                >
+                  Add new seat
                 </button>
-                <label className="tuning-control">
+                <button
+                  type="button"
+                  className={`toolbar-button subtle${isDrawingSeat ? " toolbar-active" : ""}`}
+                  onClick={handleStartDrawSeat}
+                >
+                  {isDrawingSeat ? "Stop drawing" : "Draw seat area"}
+                </button>
+              </div>
+            </div>
+            <div className="edit-toolbar-group">
+              <span className="edit-toolbar-label">Building</span>
+              <div className="edit-toolbar-actions edit-toolbar-column">
+                <label className="floor-count-field">
                   <span>Total floors</span>
                   <div className="floor-count-controls">
                     <input
@@ -3248,45 +3169,54 @@ const renderResizeHandles = (
                       Update count
                     </button>
                   </div>
-                  <span className="floorplan-hint">Allowed range: 1–20 floors.</span>
                 </label>
-                <label className="tuning-control">
-                  <span>Floor plan image ({currentFloorName})</span>
-                  <div className="floorplan-actions">
-                    <button
-                      type="button"
-                      className="toolbar-button subtle"
-                      onClick={handleOpenFloorplanPicker}
-                      disabled={isFloorplanUploading || isFloorplanDeleting}
-                    >
-                      {isFloorplanUploading
-                        ? "Uploading..."
-                        : hasCustomFloorplan
-                        ? "Change image"
-                        : "Upload image"}
-                    </button>
-                    {hasCustomFloorplan ? (
-                      <button
-                        type="button"
-                        className="toolbar-button danger"
-                        onClick={handleFloorplanRemove}
-                        disabled={isFloorplanUploading || isFloorplanDeleting}
-                      >
-                        {isFloorplanDeleting ? "Removing..." : "Remove image"}
-                      </button>
-                    ) : null}
-                  </div>
-                  <span className="floorplan-hint">
-                    Accepted: PNG, JPG or WEBP · max 5 MB ·{" "}
-                    {hasCustomFloorplan
-                      ? `custom image in use for ${currentFloorName}`
-                      : `using default image for ${currentFloorName}`}
-                  </span>
-                </label>
+                <span className="floorplan-hint">Allowed range: 1–20 floors.</span>
               </div>
-            </>
-          ) : null}
-        </div>
+            </div>
+            <div className="edit-toolbar-group">
+              <span className="edit-toolbar-label">
+                Floor plan image ({currentFloorName})
+              </span>
+              <div className="edit-toolbar-actions">
+                <input
+                  ref={floorplanFileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  style={{ display: "none" }}
+                  onChange={handleFloorplanFileChange}
+                />
+                <button
+                  type="button"
+                  className="toolbar-button subtle"
+                  onClick={handleOpenFloorplanPicker}
+                  disabled={isFloorplanUploading || isFloorplanDeleting}
+                >
+                  {isFloorplanUploading
+                    ? "Uploading..."
+                    : hasCustomFloorplan
+                    ? "Change image"
+                    : "Upload image"}
+                </button>
+                {hasCustomFloorplan ? (
+                  <button
+                    type="button"
+                    className="toolbar-button danger"
+                    onClick={handleFloorplanRemove}
+                    disabled={isFloorplanUploading || isFloorplanDeleting}
+                  >
+                    {isFloorplanDeleting ? "Removing..." : "Remove image"}
+                  </button>
+                ) : null}
+              </div>
+              <span className="floorplan-hint">
+                Accepted: PNG, JPG or WEBP · max 5 MB ·{" "}
+                {hasCustomFloorplan
+                  ? `custom image in use for ${currentFloorName}`
+                  : `using default image for ${currentFloorName}`}
+              </span>
+            </div>
+          </div>
+        ) : null}
       </header>
 
       {statusBanner ? (
@@ -3340,14 +3270,10 @@ const renderResizeHandles = (
                       const ratio = containerWidth / image.naturalWidth;
                       if (Number.isFinite(ratio) && ratio > 0) {
                         const zoomValue = Math.min(2, Math.max(0.3, Number(ratio.toFixed(2))));
-                        if (!userAdjustedZoomRef.current) {
-                          previousZoomRef.current = zoomValue;
-                          setMapZoom(zoomValue);
-                        }
-                        if (!userAdjustedSeatScaleRef.current) {
-                          const scaleValue = Math.min(1.5, Math.max(0.6, Number(ratio.toFixed(2))));
-                          setSeatScale(scaleValue);
-                        }
+                        previousZoomRef.current = zoomValue;
+                        setMapZoom(zoomValue);
+                        const scaleValue = Math.min(1.5, Math.max(0.6, Number(ratio.toFixed(2))));
+                        setSeatScale(scaleValue);
                       }
                     }
                   }}
@@ -4056,173 +3982,174 @@ const renderResizeHandles = (
               )}
             </div>
 
-          </div>
-        </section>
-
-        <section className="user-reservations-section">
-          <div className="sidebar-section user-list-section">
-            <h3>Users with reservations</h3>
-            {isLoadingAllBookings ? (
-              <p className="muted">Loading…</p>
-            ) : usersWithBookings.length === 0 ? (
-              <p className="muted">Nobody has a reservation yet.</p>
-            ) : (
-              <div className="user-chip-list">
-                {usersWithBookings.map((user) => {
-                  const isSelected = selectedUserName === user.userName;
-                  return (
-                    <button
-                      key={user.userName}
-                      type="button"
-                      className={`user-chip${isSelected ? " user-selected" : ""}`}
-                      onClick={() =>
-                        setSelectedUserName((current) =>
-                          current === user.userName ? null : user.userName
-                        )
-                      }
-                      aria-pressed={isSelected}
-                    >
-                      <span className="user-name">{user.userName}</span>
-                      <span className="user-count">{user.bookings.length}</span>
-                    </button>
-                  );
-                })}
+            <div className="user-column">
+              <div className="sidebar-section user-list-section">
+                <h3>Users with reservations</h3>
+                {isLoadingAllBookings ? (
+                  <p className="muted">Loading…</p>
+                ) : usersWithBookings.length === 0 ? (
+                  <p className="muted">Nobody has a reservation yet.</p>
+                ) : (
+                  <div className="user-chip-list">
+                    {usersWithBookings.map((user) => {
+                      const isSelected = selectedUserName === user.userName;
+                      return (
+                        <button
+                          key={user.userName}
+                          type="button"
+                          className={`user-chip${isSelected ? " user-selected" : ""}`}
+                          onClick={() =>
+                            setSelectedUserName((current) =>
+                              current === user.userName ? null : user.userName
+                            )
+                          }
+                          aria-pressed={isSelected}
+                        >
+                          <span className="user-name">{user.userName}</span>
+                          <span className="user-count">{user.bookings.length}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          <div className="sidebar-section user-detail-section">
-            {selectedUserName && selectedUserBookings.length > 0 ? (
-              <>
-                <div className="user-booking-summary">
-                  <h4>{selectedUserName}</h4>
-                  <span className="user-booking-total">
-                    {selectedUserBookings.length} booking
-                    {selectedUserBookings.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-                <ul className="user-booking-list">
-                  {selectedUserBookings.map((booking) => {
-                    const seatLabel = seatById.get(booking.seatId)?.label ?? booking.seatId;
-                    const availableSeats = getAvailableSeatsForBooking(booking).filter(
-                      (seat) => seat.id !== booking.seatId
-                    );
-                    const isBusy = bookingActionInFlight?.bookingId === booking.id;
-                    const moveModeActive = bookingBeingRescheduledId === booking.id;
-                    const moveTarget =
-                      moveTargets[booking.id] ?? (availableSeats[0]?.id ?? "");
+              <div className="sidebar-section user-detail-section">
+                {selectedUserName && selectedUserBookings.length > 0 ? (
+                  <>
+                    <div className="user-booking-summary">
+                      <h4>{selectedUserName}</h4>
+                      <span className="user-booking-total">
+                        {selectedUserBookings.length} booking
+                        {selectedUserBookings.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <ul className="user-booking-list">
+                      {selectedUserBookings.map((booking) => {
+                        const seatLabel = seatById.get(booking.seatId)?.label ?? booking.seatId;
+                        const availableSeats = getAvailableSeatsForBooking(booking).filter(
+                          (seat) => seat.id !== booking.seatId
+                        );
+                        const isBusy = bookingActionInFlight?.bookingId === booking.id;
+                        const moveModeActive = bookingBeingRescheduledId === booking.id;
+                        const moveTarget =
+                          moveTargets[booking.id] ?? (availableSeats[0]?.id ?? "");
 
-                    return (
-                      <li key={booking.id} className="user-booking-item">
-                        <div className="user-booking-info">
-                          <span className="user-booking-date">
-                            {formatDateForDisplay(booking.date)}
-                          </span>
-                          <span className="user-booking-seat">
-                            Seat: <strong>{seatLabel}</strong>
-                          </span>
-                          {booking.seriesId ? (
-                            <span className="user-booking-series">Recurring</span>
-                          ) : null}
-                        </div>
-                        {moveModeActive ? (
-                          availableSeats.length === 0 ? (
-                            <div className="user-booking-actions">
-                              <p className="muted">No alternative seats available.</p>
-                              <button
-                                type="button"
-                                className="link-button"
-                                onClick={() => handleStartMoveBooking(booking)}
-                              >
-                                Close
-                              </button>
+                        return (
+                          <li key={booking.id} className="user-booking-item">
+                            <div className="user-booking-info">
+                              <span className="user-booking-date">
+                                {formatDateForDisplay(booking.date)}
+                              </span>
+                              <span className="user-booking-seat">
+                                Seat: <strong>{seatLabel}</strong>
+                              </span>
+                              {booking.seriesId ? (
+                                <span className="user-booking-series">Recurring</span>
+                              ) : null}
                             </div>
-                          ) : (
-                            <form
-                              className="user-move-form"
-                              onSubmit={(event) => {
-                                event.preventDefault();
-                                if (!moveTarget) {
-                                  return;
-                                }
-                                void handleMoveBooking(booking, moveTarget);
-                              }}
-                            >
-                              <label className="user-move-select">
-                                <span>New seat</span>
-                                <select
-                                  value={moveTarget}
-                                  onChange={(event: ChangeEvent<HTMLSelectElement>) =>
-                                    handleMoveTargetChange(booking.id, event.target.value)
-                                  }
-                                  disabled={isBusy}
+                            {moveModeActive ? (
+                              availableSeats.length === 0 ? (
+                                <div className="user-booking-actions">
+                                  <p className="muted">No alternative seats available.</p>
+                                  <button
+                                    type="button"
+                                    className="link-button"
+                                    onClick={() => handleStartMoveBooking(booking)}
+                                  >
+                                    Close
+                                  </button>
+                                </div>
+                              ) : (
+                                <form
+                                  className="user-move-form"
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    if (!moveTarget) {
+                                      return;
+                                    }
+                                    void handleMoveBooking(booking, moveTarget);
+                                  }}
                                 >
-                                  {availableSeats.map((seat) => (
-                                    <option key={seat.id} value={seat.id}>
-                                      {seat.label ? `${seat.label} (${seat.id})` : seat.id}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                              <div className="user-move-actions">
+                                  <label className="user-move-select">
+                                    <span>New seat</span>
+                                    <select
+                                      value={moveTarget}
+                                      onChange={(event: ChangeEvent<HTMLSelectElement>) =>
+                                        handleMoveTargetChange(booking.id, event.target.value)
+                                      }
+                                      disabled={isBusy}
+                                    >
+                                      {availableSeats.map((seat) => (
+                                        <option key={seat.id} value={seat.id}>
+                                          {seat.label ? `${seat.label} (${seat.id})` : seat.id}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <div className="user-move-actions">
+                                    <button
+                                      type="submit"
+                                      className="primary"
+                                      disabled={isBusy || !moveTarget}
+                                    >
+                                      {isBusy && bookingActionInFlight?.type === "move"
+                                        ? "Moving…"
+                                        : "Move booking"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="secondary"
+                                      disabled={isBusy}
+                                      onClick={() => handleStartMoveBooking(booking)}
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </form>
+                              )
+                            ) : (
+                              <div className="user-booking-actions">
                                 <button
-                                  type="submit"
-                                  className="primary"
-                                  disabled={isBusy || !moveTarget}
+                                  type="button"
+                                  className="link-button"
+                                  disabled={isBusy || availableSeats.length === 0}
+                                  onClick={() => handleStartMoveBooking(booking)}
                                 >
-                                  {isBusy && bookingActionInFlight?.type === "move"
-                                    ? "Moving…"
-                                    : "Move booking"}
+                                  {availableSeats.length === 0
+                                    ? "No free seats"
+                                    : "Move to another seat"}
                                 </button>
                                 <button
                                   type="button"
-                                  className="secondary"
+                                  className="danger-link"
                                   disabled={isBusy}
-                                  onClick={() => handleStartMoveBooking(booking)}
+                                  onClick={() => void handleCancelUserBooking(booking)}
                                 >
-                                  Cancel
+                                  {isBusy && bookingActionInFlight?.type === "cancel"
+                                    ? "Canceling…"
+                                    : "Cancel day"}
                                 </button>
                               </div>
-                            </form>
-                          )
-                        ) : (
-                          <div className="user-booking-actions">
-                            <button
-                              type="button"
-                              className="link-button"
-                              disabled={isBusy || availableSeats.length === 0}
-                              onClick={() => handleStartMoveBooking(booking)}
-                            >
-                              {availableSeats.length === 0
-                                ? "No free seats"
-                                : "Move to another seat"}
-                            </button>
-                            <button
-                              type="button"
-                              className="danger-link"
-                              disabled={isBusy}
-                              onClick={() => void handleCancelUserBooking(booking)}
-                            >
-                              {isBusy && bookingActionInFlight?.type === "cancel"
-                                ? "Canceling…"
-                                : "Cancel day"}
-                            </button>
-                          </div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </>
-            ) : (
-              <p className="muted">
-                {usersWithBookings.length === 0
-                  ? "Nobody has a reservation yet."
-                  : "Select a user to manage their reservations."}
-              </p>
-            )}
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </>
+                ) : (
+                  <p className="muted">
+                    {usersWithBookings.length === 0
+                      ? "Nobody has a reservation yet."
+                      : "Select a user to manage their reservations."}
+                  </p>
+                )}
+              </div>
+            </div>
+
           </div>
         </section>
+
       </main>
     </div>
   );
