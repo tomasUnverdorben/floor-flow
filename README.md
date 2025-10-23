@@ -153,7 +153,9 @@ Each seat stores its position as percentages of the floor-plan image, along with
 ## 👥 Managing Reservations
 
 - The sidebar shows everyone with bookings for the selected day and, in a separate panel, a full list of users with reservations.
+- The “Bookings on this day” list is fully interactive — click a row to jump to that seat on the floor plan and highlight it instantly.
 - Click a user chip to expand an interactive list of their upcoming bookings — move a single day to another seat or cancel it in one click.
+- Need a desk fast? When no seat is selected, the details panel now suggests up to five free seats for the chosen day (prioritising the current floor), and picking one auto-selects it on the map.
 - The cancellation actions are synced with the server and feed into analytics automatically.
 
 ---
@@ -164,7 +166,7 @@ Need a bigger picture? Click the **Statistics** button next to *Edit mode*.
 
 - Filter by custom start/end dates or use quick ranges (7 / 30 / 90 days, year-to-date).
 - See totals for created, active, and cancelled bookings plus the average per day and the number of unique teammates reserving seats.
-- Ranked tables highlight the most popular seats, most active users, teammates who cancel most often, and the busiest days in the selected window.
+- Ranked tables highlight the most popular seats, most active users, teammates who cancel most often, and the busiest days in the selected window — each list now includes inline bar charts so you can see relative volumes at a glance.
 
 All metrics are powered by `/api/analytics/summary`, which computes aggregates from the JSON data store. Attach the API to BI tooling or export the results if you need deeper reporting.
 
@@ -234,8 +236,6 @@ Without a password, edit mode is open to all users.
 
 - Authentication & roles (admin / user)
 - Calendar sync (Outlook, Google)
-- Weekly/monthly views
-- Real DB backend (PostgreSQL, SQLite)
 - CSV/Excel seat import & version history
 
 ---

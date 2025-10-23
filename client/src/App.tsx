@@ -139,6 +139,15 @@ const normalizeCoordinate = (value: number) => Math.round(clamp(value, 0, 100) *
 const clampPercentage = (value: number) => Math.min(100, Math.max(0, value));
 const roundToTwoDecimals = (value: number) => Math.round(value * 100) / 100;
 
+const MIN_BAR_PERCENTAGE = 6;
+const calculateBarWidth = (value: number, max: number) => {
+  if (max <= 0 || value <= 0) {
+    return 0;
+  }
+  const percentage = (value / max) * 100;
+  return clamp(percentage, MIN_BAR_PERCENTAGE, 100);
+};
+
 type SeatResizeHandle = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
 
 const RESIZE_HANDLE_CONFIG: Record<
@@ -1115,6 +1124,32 @@ function MainDashboard() {
     return lookup;
   }, [seats]);
 
+  const { suggestedSeats, totalAvailableSeats } = useMemo(() => {
+    if (seats.length === 0) {
+      return { suggestedSeats: [] as Seat[], totalAvailableSeats: 0 };
+    }
+
+    const occupiedSeatIds = new Set(bookings.map((booking) => booking.seatId));
+    const freeSeats = seats.filter((seat) => !occupiedSeatIds.has(seat.id));
+    const sorted = freeSeats
+      .slice()
+      .sort((a, b) => {
+        const aOnCurrentFloor = a.floor === selectedFloor ? 0 : 1;
+        const bOnCurrentFloor = b.floor === selectedFloor ? 0 : 1;
+        if (aOnCurrentFloor !== bOnCurrentFloor) {
+          return aOnCurrentFloor - bOnCurrentFloor;
+        }
+        const labelA = a.label || a.id;
+        const labelB = b.label || b.id;
+        return labelA.localeCompare(labelB, undefined, { numeric: true, sensitivity: "base" });
+      });
+
+    return {
+      suggestedSeats: sorted.slice(0, 5),
+      totalAvailableSeats: freeSeats.length
+    };
+  }, [bookings, seats, selectedFloor]);
+
   const usersWithBookings = useMemo(
     () =>
       Array.from(
@@ -1834,6 +1869,10 @@ function MainDashboard() {
   };
 
   const handleSeatClick = (seatId: string) => {
+    const seat = seatsRef.current.find((item) => item.id === seatId);
+    if (seat) {
+      setSelectedFloor(seat.floor);
+    }
     setSelectedSeatId(seatId);
     setDraftSeat(null);
     setStatusBanner(null);
@@ -3700,16 +3739,16 @@ const renderResizeHandles = (
             ) : (
               <>
                 <p className="selected-date">{formatDateForDisplay(selectedDate)}</p>
-                    {selectedSeat ? (
-                      <>
-                        <p className="muted">
-                          Floor: <strong>{getFloorName(selectedSeat.floor)}</strong>
-                        </p>
-                        {selectedSeat.zone ? (
-                          <p className="muted">
-                            Zone: <strong>{selectedSeat.zone}</strong>
-                          </p>
-                        ) : null}
+                {selectedSeat ? (
+                  <>
+                    <p className="muted">
+                      Floor: <strong>{getFloorName(selectedSeat.floor)}</strong>
+                    </p>
+                    {selectedSeat.zone ? (
+                      <p className="muted">
+                        Zone: <strong>{selectedSeat.zone}</strong>
+                      </p>
+                    ) : null}
                     {selectedSeat.notes ? (
                       <p className="muted">{selectedSeat.notes}</p>
                     ) : null}
@@ -3941,9 +3980,47 @@ const renderResizeHandles = (
                     )}
                   </>
                 ) : (
-                  <p className="muted">
-                    Click the floor plan to see details and make a booking.
-                  </p>
+                  <div className="seat-suggestions">
+                    <p className="muted">
+                      {totalAvailableSeats > 0
+                        ? "Pick one of the free seats below or tap the map to explore more options."
+                        : "Every seat is booked for this day. Try another date to find an open spot."}
+                    </p>
+                    {suggestedSeats.length > 0 ? (
+                      <div className="available-seat-suggestions">
+                        <h4>Available today</h4>
+                        <ul className="available-seat-list">
+                          {suggestedSeats.map((seat) => {
+                            const seatLabel = seat.label || seat.id;
+                            const details: string[] = [getFloorName(seat.floor)];
+                            if (seat.zone) {
+                              details.push(`Zone ${seat.zone}`);
+                            }
+                            const detailText = details.join(" | ");
+                            return (
+                              <li key={seat.id}>
+                                <button
+                                  type="button"
+                                  className="available-seat-item"
+                                  onClick={() => handleSeatClick(seat.id)}
+                                >
+                                  <span className="available-seat-label">{seatLabel}</span>
+                                  <span className="available-seat-details">{detailText}</span>
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                        {totalAvailableSeats > suggestedSeats.length ? (
+                          <p className="available-seat-note muted">
+                            {totalAvailableSeats - suggestedSeats.length === 1
+                              ? "1 more seat is free today - see the map for the rest."
+                              : `${totalAvailableSeats - suggestedSeats.length} more seats are free today - see the map for the rest.`}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                 )}
               </>
             )}
@@ -3959,12 +4036,19 @@ const renderResizeHandles = (
                 <ul className="booking-list">
                   {sortedBookings.map((booking) => {
                     const seat = seats.find((item) => item.id === booking.seatId);
+                    const seatLabel = seat ? seat.label : booking.seatId;
+                    const isSelected = selectedSeatId === booking.seatId;
                     return (
                       <li key={booking.id}>
-                        <span className="booking-seat">
-                          {seat ? seat.label : booking.seatId}
-                        </span>
-                        <span className="booking-user">{booking.userName}</span>
+                        <button
+                          type="button"
+                          className={`booking-item${isSelected ? " booking-item-selected" : ""}`}
+                          onClick={() => handleSeatClick(booking.seatId)}
+                          aria-pressed={isSelected}
+                        >
+                          <span className="booking-seat">{seatLabel}</span>
+                          <span className="booking-user">{booking.userName}</span>
+                        </button>
                       </li>
                     );
                   })}
@@ -4202,10 +4286,26 @@ function StatsPage() {
     setFromDate(start);
   }, []);
 
-  const topSeats = summary?.topSeats ?? [];
-  const topUsers = summary?.topUsers ?? [];
-  const topCancellations = summary?.topCancellations ?? [];
-  const busiestDays = summary?.busiestDays ?? [];
+  const topSeats = useMemo(() => summary?.topSeats ?? [], [summary]);
+  const topUsers = useMemo(() => summary?.topUsers ?? [], [summary]);
+  const topCancellations = useMemo(() => summary?.topCancellations ?? [], [summary]);
+  const busiestDays = useMemo(() => summary?.busiestDays ?? [], [summary]);
+  const maxSeatCount = useMemo(
+    () => topSeats.reduce((max, seat) => Math.max(max, seat.count), 0),
+    [topSeats]
+  );
+  const maxUserCount = useMemo(
+    () => topUsers.reduce((max, user) => Math.max(max, user.count), 0),
+    [topUsers]
+  );
+  const maxCancellationCount = useMemo(
+    () => topCancellations.reduce((max, cancellation) => Math.max(max, cancellation.count), 0),
+    [topCancellations]
+  );
+  const maxBusyDayCount = useMemo(
+    () => busiestDays.reduce((max, day) => Math.max(max, day.count), 0),
+    [busiestDays]
+  );
 
   return (
     <div className="stats-shell">
@@ -4334,11 +4434,19 @@ function StatsPage() {
                 <ul className="stat-list">
                   {topSeats.map((seat) => (
                     <li key={seat.seatId}>
-                      <div>
-                        <strong>{seat.label || seat.seatId}</strong>
-                        <span className="muted">Seat ID: {seat.seatId}</span>
+                      <div className="stat-item-row">
+                        <div>
+                          <strong>{seat.label || seat.seatId}</strong>
+                          <span className="muted">Seat ID: {seat.seatId}</span>
+                        </div>
+                        <span className="stat-count">{seat.count}</span>
                       </div>
-                      <span className="stat-count">{seat.count}</span>
+                      <div className="stat-bar" aria-hidden="true">
+                        <div
+                          className="stat-bar-fill"
+                          style={{ width: `${calculateBarWidth(seat.count, maxSeatCount)}%` }}
+                        />
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -4352,8 +4460,16 @@ function StatsPage() {
                 <ul className="stat-list">
                   {topUsers.map((user) => (
                     <li key={user.userName}>
-                      <span>{user.userName}</span>
-                      <span className="stat-count">{user.count}</span>
+                      <div className="stat-item-row">
+                        <span>{user.userName}</span>
+                        <span className="stat-count">{user.count}</span>
+                      </div>
+                      <div className="stat-bar" aria-hidden="true">
+                        <div
+                          className="stat-bar-fill"
+                          style={{ width: `${calculateBarWidth(user.count, maxUserCount)}%` }}
+                        />
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -4367,8 +4483,18 @@ function StatsPage() {
                 <ul className="stat-list">
                   {topCancellations.map((user) => (
                     <li key={`cancel-${user.userName}`}>
-                      <span>{user.userName}</span>
-                      <span className="stat-count">{user.count}</span>
+                      <div className="stat-item-row">
+                        <span>{user.userName}</span>
+                        <span className="stat-count">{user.count}</span>
+                      </div>
+                      <div className="stat-bar" aria-hidden="true">
+                        <div
+                          className="stat-bar-fill"
+                          style={{
+                            width: `${calculateBarWidth(user.count, maxCancellationCount)}%`
+                          }}
+                        />
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -4382,8 +4508,16 @@ function StatsPage() {
                 <ul className="stat-list">
                   {busiestDays.map((day) => (
                     <li key={day.date}>
-                      <span>{formatDateForDisplay(day.date)}</span>
-                      <span className="stat-count">{day.count}</span>
+                      <div className="stat-item-row">
+                        <span>{formatDateForDisplay(day.date)}</span>
+                        <span className="stat-count">{day.count}</span>
+                      </div>
+                      <div className="stat-bar" aria-hidden="true">
+                        <div
+                          className="stat-bar-fill"
+                          style={{ width: `${calculateBarWidth(day.count, maxBusyDayCount)}%` }}
+                        />
+                      </div>
                     </li>
                   ))}
                 </ul>
