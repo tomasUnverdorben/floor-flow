@@ -27,6 +27,7 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/server ./server
 COPY --from=builder /app/client/dist ./client/dist
+COPY --from=builder /app/client/public ./client/public
 
 # Ensure data directory exists for runtime writes
 RUN mkdir -p /app/server/data
