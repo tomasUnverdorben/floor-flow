@@ -1,0 +1,42 @@
+{
+  "realm": "floorflow",
+  "displayName": "FloorFlow",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "floorflow",
+      "enabled": true,
+      "name": "FloorFLow UI",
+      "description": "Client for FloorFlow UI",
+      "clientAuthenticatorType": "client-secret",
+      "publicClient": true,
+      "rootUrl": "http://localhost:5173",
+      "adminUrl": "http://localhost:5173",
+      "baseUrl": "/",
+      "redirectUris": [
+        "/*"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "standardFlowEnabled": true,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "backchannel.logout.session.required": "true",
+        "post.logout.redirect.uris": "+"
+      }
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "floorflow_admin",
+        "description": "Admin User"
+      },
+      {
+        "name": "floorflow_user",
+        "description": "Regular User"
+      }
+    ]
+  }
+}

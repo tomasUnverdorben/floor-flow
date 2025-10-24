@@ -1,7 +1,9 @@
 import type { CSSProperties, ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { Route, Routes, useNavigate } from "react-router-dom";
 import "./App.css";
+import PrivateRoute from "./components/PrivateRoute";
+import LoginRedirectPage from "./components/LoginRedirectPage.tsx";
 
 type Seat = {
   id: string;
@@ -4459,12 +4461,20 @@ function StatsPage() {
   );
 }
 
+const requireAuthentication = (element) => {
+    return (
+        <PrivateRoute>
+            {element}
+        </PrivateRoute>
+    )
+}
+
 function App() {
   return (
     <Routes>
-      <Route path="/" element={<MainDashboard />} />
-      <Route path="/stats" element={<StatsPage />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="/" element={requireAuthentication(<MainDashboard />, '/')} />
+      <Route path="/stats" element={requireAuthentication(<StatsPage />, '/')} />
+      <Route path="/login" element={<LoginRedirectPage />} />
     </Routes>
   );
 }

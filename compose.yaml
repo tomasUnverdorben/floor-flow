@@ -7,3 +7,32 @@ services:
       MONGODB_DB: floorflow
       MONGODB_USER: floorflow
       MONGODB_PASSWORD: start234
+
+  postgres:
+    image: "postgres:18"
+    environment:
+      - "POSTGRES_DB=floorflow"
+      - "POSTGRES_PASSWORD=start234"
+      - "POSTGRES_USER=floorflow"
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./.docker/postgres/init-scripts/:/docker-entrypoint-initdb.d/
+
+  keycloak:
+    image: keycloak/keycloak:26.3.4
+    command: start-dev --import-realm
+    depends_on:
+      - postgres
+    environment:
+      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=start234
+      - KC_DB=postgres
+      - KC_DB_URL_HOST=postgres
+      - KC_DB_URL_DATABASE=floorflow
+      - KC_DB_USERNAME=floorflow
+      - KC_DB_PASSWORD=start234
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./.docker/keycloak/import:/opt/keycloak/data/import

@@ -12,7 +12,7 @@
   },
   "nodemonConfig": {
     "env": {
-      "MONGODB_ENABLED": "false",
+      "MONGODB_ENABLED": "true",
       "MONGODB_URL": "localhost:27017",
       "MONGODB_DB_NAME": "floorflow"
     }

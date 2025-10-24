@@ -28,3 +28,7 @@ client/.env
 
 # Misc
 *.local
+
+.docker
+!.docker/keycloak/import/realm.json
+!.docker/postgres/init-scripts
